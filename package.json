@@ -1,0 +1,70 @@
+{
+  "name": "cursor-notepads",
+  "displayName": "Cursor Notepads",
+  "description": "View your deprecated Cursor Notepads directly in the Explorer sidebar",
+  "publisher": "lch",
+  "version": "0.1.1",
+  "icon": "cursor-notepad.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "notepad",
+    "notepads",
+    "note",
+    "notes",
+    "cursor-notepad"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "id": "cnp.view",
+          "name": "Notepads",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Notepads",
+      "properties": {
+        "cursorNotepads.debugLogs": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logs in Output: Cursor Notepads"
+        }
+      }
+    }
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LCH-1/cursor-notepads"
+  },
+  "scripts": {
+    "compile": "tsc -p . && cpx node_modules/sql.js/dist/sql-wasm.wasm out",
+    "watch": "tsc -w",
+    "package": "npx vsce package",
+    "publish": "npm run compile && npx vsce publish",
+    "publish:patch": "npm run compile && npx vsce publish patch",
+    "publish:minor": "npm run compile && npx vsce publish minor",
+    "publish:major": "npm run compile && npx vsce publish major",
+    "ovsx:publish": "npx ovsx publish --pat $OVSX_TOKEN"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "@types/sql.js": "^1.4.9",
+    "@types/vscode": "^1.75.0",
+    "cpx": "^1.5.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "sql.js": "^1.13.0"
+  }
+}
