@@ -3,11 +3,11 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import initSqlJs, { SqlJsStatic } from 'sql.js';
 
-let DEBUG = false;
+let VERBOSE = false;
 let outputChannel: vscode.OutputChannel;
 
 function log(...args: any[]) {
-  if (DEBUG && outputChannel) {
+  if (outputChannel) {
     const message = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
     outputChannel.appendLine(`[LOG] ${message}`);
   }
@@ -33,14 +33,14 @@ async function findWorkspaceMappingIdFromStorageUri(ctx: vscode.ExtensionContext
   const storagePath = ctx.storageUri.fsPath;
   log('[storageUri] path=', storagePath);
 
-  // storageUri 경로는 {workspaceStorage}/{workspace-id}/{extension-id}/ 형태
-  // workspace-id를 추출하기 위해 상위 디렉토리로 이동
+
+
   const workspaceIdDir = path.dirname(storagePath);
   const workspaceId = path.basename(workspaceIdDir);
 
   log('[storageUri] extracted id=', workspaceId);
 
-  // workspace.json이 있는지 확인하여 유효성 검증
+
   const workspaceJson = path.join(workspaceIdDir, 'workspace.json');
   if (!(await exists(workspaceJson))) {
     warn('[storageUri] workspace.json not found at', workspaceJson);
@@ -76,10 +76,94 @@ function decodeBlob(value: any): string | undefined {
 
 type Notepad = { id: string; name: string; text: string };
 
-// ---------- Constants ----------
+
 const MAX_FILENAME_LENGTH = 80;
 const MAX_SUMMARY_LENGTH = 60;
 const SUMMARY_TRUNCATE_LENGTH = 57;
+const NOTEPADS_FILENAME = 'notepads.json';
+
+
+async function getNotepadsJsonPath(ctx: vscode.ExtensionContext): Promise<string | undefined> {
+  if (!ctx.storageUri) {
+    warn('[getNotepadsJsonPath] storageUri not available');
+    return undefined;
+  }
+
+  const storagePath = ctx.storageUri.fsPath;
+  const workspaceIdDir = path.dirname(storagePath);
+
+  // {workspaceStorage}/{workspace-id}/notepads.json
+  return path.join(workspaceIdDir, NOTEPADS_FILENAME);
+}
+
+async function readNotepadsFromJson(ctx: vscode.ExtensionContext): Promise<Notepad[]> {
+  const jsonPath = await getNotepadsJsonPath(ctx);
+  if (!jsonPath) return [];
+
+  if (!(await exists(jsonPath))) {
+    return [];
+  }
+
+  try {
+    const content = await fs.readFile(jsonPath, 'utf-8');
+    const data = JSON.parse(content);
+
+    // Support both old object format and new array format
+    let notes: Notepad[] = [];
+
+    if (Array.isArray(data)) {
+      // New array format
+      notes = data.map(n => ({
+        id: typeof n.id === 'string' ? n.id : String(Date.now()),
+        name: typeof n.name === 'string' ? n.name : '(untitled)',
+        text: typeof n.text === 'string' ? n.text : ''
+      }));
+    } else if (data.notepads && typeof data.notepads === 'object') {
+      // Old object format - migrate to array
+      for (const key of Object.keys(data.notepads)) {
+        const n = data.notepads[key];
+        if (!n) continue;
+        notes.push({
+          id: typeof n.id === 'string' ? n.id : key,
+          name: typeof n.name === 'string' ? n.name : '(untitled)',
+          text: typeof n.text === 'string' ? n.text : ''
+        });
+      }
+      // Auto-save in new format
+      if (notes.length > 0) {
+        await writeNotepadsToJson(ctx, notes);
+        log('[readNotepadsFromJson] migrated old object format to new array format');
+      }
+    }
+
+    return notes;
+  } catch (e) {
+    warn('[readNotepadsFromJson] failed', e);
+    return [];
+  }
+}
+
+async function writeNotepadsToJson(ctx: vscode.ExtensionContext, notes: Notepad[]): Promise<boolean> {
+  const jsonPath = await getNotepadsJsonPath(ctx);
+  if (!jsonPath) {
+    warn('[writeNotepadsToJson] no storage path available');
+    return false;
+  }
+
+  try {
+    // Ensure directory exists
+    const dirPath = path.dirname(jsonPath);
+    await fs.mkdir(dirPath, { recursive: true });
+
+    // Save as array format (simpler structure)
+    await fs.writeFile(jsonPath, JSON.stringify(notes, null, 2), 'utf-8');
+    log('[writeNotepadsToJson] saved', notes.length, 'notes to', jsonPath);
+    return true;
+  } catch (e) {
+    warn('[writeNotepadsToJson] failed', e);
+    return false;
+  }
+}
 
 function extractNotepadsFromJson(jsonText: string): Notepad[] {
   try {
@@ -126,18 +210,7 @@ function querySingleTextByKey(db: import('sql.js').Database, key: string): strin
   return undefined;
 }
 
-// ---------- Readonly virtual doc provider ----------
-class NotepadDocProvider implements vscode.TextDocumentContentProvider {
-  static readonly scheme = 'cnp-notepad';
-  private notes = new Map<string, Notepad>();
 
-  set(note: Notepad) { this.notes.set(note.id, note); }
-  provideTextDocumentContent(uri: vscode.Uri): string {
-    const id = uri.query.replace(/^id=/, '');
-    const note = this.notes.get(id);
-    return note ? note.text : '';
-  }
-}
 
 function sanitizeFileName(name: string): string {
   return name.replace(/[\\\/:\*\?"<>\|]/g, '_').slice(0, MAX_FILENAME_LENGTH) || 'note';
@@ -169,7 +242,43 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private items: NotepadItem[] = [];
+  private notepads: Notepad[] = [];
   constructor(private readonly ctx: vscode.ExtensionContext) { }
+
+  // Drag and drop support
+  dragMimeTypes = ['application/vnd.code.tree.cnp-notepad'];
+  dropMimeTypes = ['application/vnd.code.tree.cnp-notepad'];
+
+  async handleDrag(source: readonly NotepadItem[], dataTransfer: vscode.DataTransfer): Promise<void> {
+    dataTransfer.set('application/vnd.code.tree.cnp-notepad', new vscode.DataTransferItem(source));
+  }
+
+  async handleDrop(target: NotepadItem | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
+    const transferItem = dataTransfer.get('application/vnd.code.tree.cnp-notepad');
+    if (!transferItem) return;
+
+    const source = transferItem.value as NotepadItem[];
+    if (!source || source.length === 0) return;
+
+    const sourceNote = source[0].note;
+    const sourceIndex = this.notepads.findIndex(n => n.id === sourceNote.id);
+    if (sourceIndex === -1) return;
+
+    // Remove from original position
+    this.notepads.splice(sourceIndex, 1);
+
+    if (target) {
+      // Insert before target
+      const targetIndex = this.notepads.findIndex(n => n.id === target.note.id);
+      this.notepads.splice(targetIndex, 0, sourceNote);
+    } else {
+      // Drop at end
+      this.notepads.push(sourceNote);
+    }
+
+    await writeNotepadsToJson(this.ctx, this.notepads);
+    await this.rescan();
+  }
 
   async init(): Promise<void> { await this.rescan(); }
   async rescan(): Promise<void> {
@@ -180,14 +289,68 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
   getTreeItem(element: NotepadItem): vscode.TreeItem { return element; }
   getChildren(): vscode.ProviderResult<NotepadItem[]> { return this.items; }
 
+  getNoteById(id: string): Notepad | undefined {
+    return this.notepads.find(n => n.id === id);
+  }
+
+  async addNote(name: string, text: string): Promise<boolean> {
+    const newNote: Notepad = {
+      id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+      name,
+      text
+    };
+    this.notepads.push(newNote);
+    const success = await writeNotepadsToJson(this.ctx, this.notepads);
+    if (success) {
+      await this.rescan();
+    }
+    return success;
+  }
+
+  async updateNote(id: string, name: string, text: string): Promise<boolean> {
+    const note = this.notepads.find(n => n.id === id);
+    if (!note) return false;
+
+    note.name = name;
+    note.text = text;
+    const success = await writeNotepadsToJson(this.ctx, this.notepads);
+    if (success) {
+      await this.rescan();
+    }
+    return success;
+  }
+
+  async deleteNote(id: string): Promise<boolean> {
+    const index = this.notepads.findIndex(n => n.id === id);
+    if (index === -1) return false;
+
+    this.notepads.splice(index, 1);
+    const success = await writeNotepadsToJson(this.ctx, this.notepads);
+    if (success) {
+      await this.rescan();
+    }
+    return success;
+  }
+
   private async scanCurrentWorkspace(): Promise<void> {
-    DEBUG = !!vscode.workspace.getConfiguration('cursorNotepads').get('debugLogs', false);
+    VERBOSE = !!vscode.workspace.getConfiguration('cursorNotepads').get('verbose', false);
 
-    // ExtensionContext.storageUri를 통해 workspace ID 추출
+    const jsonPath = await getNotepadsJsonPath(this.ctx);
+
+    if (jsonPath && await exists(jsonPath)) {
+      log('[scan] notepads.json exists - reading from JSON file');
+      this.notepads = await readNotepadsFromJson(this.ctx);
+      log('[scan] loaded', this.notepads.length, 'notes from JSON');
+      this.items = this.notepads.map(n => new NotepadItem(n));
+      return;
+    }
+
+    log('[scan] notepads.json not found - migrating from DB');
+
     const mapping = await findWorkspaceMappingIdFromStorageUri(this.ctx);
-
     if (!mapping) {
-      log('[result] workspace id not found via storageUri - no notepads to display');
+      log('[scan] no workspace mapping found');
+      this.notepads = [];
       this.items = [];
       return;
     }
@@ -198,26 +361,50 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
     });
 
     const db = await openStateDb(SQL as SqlJsStatic, mapping.dir);
-    if (!db) { this.items = []; return; }
+    if (!db) {
+      this.notepads = [];
+      this.items = [];
+      return;
+    }
 
     try {
       const npJson = querySingleTextByKey(db, 'notepadData');
-      if (!npJson) { log('[hit] mappingId=', mapping.id, 'but no notepadData key'); this.items = []; return; }
+      if (!npJson) {
+        log('[scan] no notepadData in DB');
+        this.notepads = [];
+        this.items = [];
+        return;
+      }
+
       const notes = extractNotepadsFromJson(npJson);
-      log('[hit] notepads=', notes.length);
+      log('[scan] found', notes.length, 'notes in DB - migrating to JSON');
+
+      if (jsonPath && notes.length > 0) {
+        const migrated = await writeNotepadsToJson(this.ctx, notes);
+        if (migrated) {
+          log('[scan] migration successful -', notes.length, 'notes saved to', jsonPath);
+          vscode.window.showInformationMessage(
+            `Cursor Notepads: Successfully migrated ${notes.length} note(s) to notepads.json`
+          );
+        }
+      }
+
+      this.notepads = notes;
       this.items = notes.map(n => new NotepadItem(n));
-    } finally { try { db.close(); } catch { } }
+    } finally {
+      try { db.close(); } catch { }
+    }
   }
 }
 
 export async function activate(ctx: vscode.ExtensionContext) {
-  // Output 채널 생성
+
   outputChannel = vscode.window.createOutputChannel('Cursor Notepads');
   ctx.subscriptions.push(outputChannel);
 
-  DEBUG = !!vscode.workspace.getConfiguration('cursorNotepads').get('debugLogs', false);
+  VERBOSE = !!vscode.workspace.getConfiguration('cursorNotepads').get('verbose', false);
 
-  // Remote 환경 감지 및 로깅
+
   if (vscode.env.remoteName) {
     log('[remote] detected remote environment:', vscode.env.remoteName);
     log('[remote] extension should run on UI (host) side - check extensionKind setting');
@@ -225,41 +412,127 @@ export async function activate(ctx: vscode.ExtensionContext) {
     log('[local] running on local/UI environment');
   }
 
-  // register readonly provider
-  const docProvider = new NotepadDocProvider();
-  ctx.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider(NotepadDocProvider.scheme, docProvider));
 
-  // command to open note
+  const provider = new NotepadTreeProvider(ctx);
+  const view = vscode.window.createTreeView('cnp.view', {
+    treeDataProvider: provider,
+    dragAndDropController: provider,
+    canSelectMany: false
+  });
+  ctx.subscriptions.push(view);
+
+  await provider.init();
+
+
   ctx.subscriptions.push(vscode.commands.registerCommand('cnp.openNote', async (note: Notepad) => {
     try {
-      docProvider.set(note);
-      const file = sanitizeFileName(note.name || note.id) + '.md';
-      const uri = vscode.Uri.parse(`${NotepadDocProvider.scheme}:/${file}?id=${encodeURIComponent(note.id)}`);
+      const fileName = sanitizeFileName(note.name || note.id) + '.np';
+      const tmpDir = ctx.globalStorageUri.fsPath;
+      await fs.mkdir(tmpDir, { recursive: true });
+
+      const tmpFile = path.join(tmpDir, fileName);
+      await fs.writeFile(tmpFile, note.text, 'utf-8');
+
+      const uri = vscode.Uri.file(tmpFile);
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false });
-      // 언어 모드 마크다운으로
-      try { await vscode.languages.setTextDocumentLanguage(doc, 'markdown'); } catch { }
+
+      // Set language mode to markdown
+      await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
+
+      const saveListener = vscode.workspace.onDidSaveTextDocument(async savedDoc => {
+        if (savedDoc.uri.fsPath === tmpFile) {
+          const newText = savedDoc.getText();
+          await provider.updateNote(note.id, note.name, newText);
+          if (VERBOSE) {
+            vscode.window.showInformationMessage(`Note "${note.name}" saved`);
+          }
+        }
+      });
+      ctx.subscriptions.push(saveListener);
     } catch (e) {
       warn('openNote failed', e);
       vscode.window.showErrorMessage('Failed to open note');
     }
   }));
 
-  // tree view
-  const provider = new NotepadTreeProvider(ctx);
-  const view = vscode.window.createTreeView('cnp.view', { treeDataProvider: provider });
-  ctx.subscriptions.push(view);
+  ctx.subscriptions.push(vscode.commands.registerCommand('cnp.newNote', async () => {
+    const name = await vscode.window.showInputBox({
+      prompt: 'Enter note name',
+      placeHolder: 'e.g. Meeting Notes',
+      value: 'New Notepad'
+    });
 
-  await provider.init();
+    if (!name) return;
 
-  // re-scan triggers
+    const success = await provider.addNote(name, '');
+    if (success) {
+      if (VERBOSE) {
+        vscode.window.showInformationMessage(`Note "${name}" created`);
+      }
+    } else {
+      vscode.window.showErrorMessage('Failed to create note - Make sure a workspace folder is open');
+    }
+  }));
+
+
+  ctx.subscriptions.push(vscode.commands.registerCommand('cnp.deleteNote', async (item: NotepadItem) => {
+    if (!item) {
+      vscode.window.showWarningMessage('Please right-click on a notepad item to delete it');
+      return;
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+      `Are you sure you want to delete note "${item.note.name}"?`,
+      { modal: true },
+      'Delete'
+    );
+
+    if (confirm === 'Delete') {
+      const success = await provider.deleteNote(item.note.id);
+      if (success) {
+        if (VERBOSE) {
+          vscode.window.showInformationMessage(`Note "${item.note.name}" deleted`);
+        }
+      } else {
+        vscode.window.showErrorMessage('Failed to delete note');
+      }
+    }
+  }));
+
+
+  ctx.subscriptions.push(vscode.commands.registerCommand('cnp.renameNote', async (item: NotepadItem) => {
+    if (!item) {
+      vscode.window.showWarningMessage('Please right-click on a notepad item to rename it');
+      return;
+    }
+
+    const newName = await vscode.window.showInputBox({
+      prompt: 'Enter new name',
+      value: item.note.name
+    });
+
+    if (!newName || newName === item.note.name) return;
+
+    const success = await provider.updateNote(item.note.id, newName, item.note.text);
+    if (success) {
+      if (VERBOSE) {
+        vscode.window.showInformationMessage(`Note renamed to "${newName}"`);
+      }
+    } else {
+      vscode.window.showErrorMessage('Failed to rename note');
+    }
+  }));
+
+  // Refresh
+  ctx.subscriptions.push(vscode.commands.registerCommand('cnp.refresh', () => provider.rescan()));
+
   ctx.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => provider.rescan()),
     vscode.workspace.onDidChangeConfiguration(e => {
-      if (e.affectsConfiguration('cursorNotepads.debugLogs')) {
-        DEBUG = !!vscode.workspace.getConfiguration('cursorNotepads').get('debugLogs', false);
-        log('debugLogs changed ->', DEBUG);
-        provider.rescan();
+      if (e.affectsConfiguration('cursorNotepads.verbose')) {
+        VERBOSE = !!vscode.workspace.getConfiguration('cursorNotepads').get('verbose', false);
+        log('verbose changed ->', VERBOSE);
       }
     })
   );
