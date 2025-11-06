@@ -1,12 +1,12 @@
 {
   "name": "cursor-notepads",
   "displayName": "Cursor Notepads",
-  "description": "View your deprecated Cursor Notepads directly in the Explorer sidebar",
+  "description": "View, create, and edit your deprecated Cursor Notepads with automatic migration to JSON",
   "publisher": "lch",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "icon": "cursor-notepad.png",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.76.0"
   },
   "categories": [
     "Other"
@@ -20,6 +20,14 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "languages": [
+      {
+        "id": "markdown",
+        "extensions": [
+          ".np"
+        ]
+      }
+    ],
     "views": {
       "explorer": [
         {
@@ -29,13 +37,63 @@
         }
       ]
     },
+    "commands": [
+      {
+        "command": "cnp.newNote",
+        "title": "New Note",
+        "category": "Notepads",
+        "icon": "$(add)"
+      },
+      {
+        "command": "cnp.refresh",
+        "title": "Refresh",
+        "category": "Notepads",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cnp.deleteNote",
+        "title": "Delete",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "cnp.renameNote",
+        "title": "Rename",
+        "icon": "$(edit)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "cnp.newNote",
+          "when": "view == cnp.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cnp.refresh",
+          "when": "view == cnp.view",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cnp.renameNote",
+          "when": "view == cnp.view && viewItem == notepadItem",
+          "group": "inline@1"
+        },
+        {
+          "command": "cnp.deleteNote",
+          "when": "view == cnp.view && viewItem == notepadItem",
+          "group": "inline@2"
+        }
+      ]
+    },
     "configuration": {
       "title": "Notepads",
       "properties": {
-        "cursorNotepads.debugLogs": {
+        "cursorNotepads.verbose": {
           "type": "boolean",
           "default": false,
-          "description": "Enable debug logs in Output: Cursor Notepads"
+          "description": "Show verbose notifications for all actions (create, save, delete, rename)"
         }
       }
     }
@@ -60,7 +118,7 @@
   "devDependencies": {
     "@types/node": "^22.19.0",
     "@types/sql.js": "^1.4.9",
-    "@types/vscode": "^1.75.0",
+    "@types/vscode": "^1.76.0",
     "cpx": "^1.5.0",
     "typescript": "^5.9.3"
   },
