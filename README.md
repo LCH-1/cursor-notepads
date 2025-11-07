@@ -18,15 +18,15 @@ View and edit your deprecated Cursor Notepads directly in the Explorer sidebar. 
 ## 🚀 How It Works
 
 ### First Time (Migration)
-1. The extension checks if `notepads.json` exists in your workspace folder
+1. The extension checks if `notepads.json` exists in the workspace storage directory
 2. If not found, reads Cursor's internal `state.vscdb` database
 3. Extracts notepad data and saves it to `notepads.json`
 4. Shows a confirmation message when migration is complete
 
 ### After Migration
-1. All notepad data is read from `notepads.json`
-2. Click a notepad to open and edit it
-3. Changes are saved back to `notepads.json`
+1. All notepad data is read from `notepads.json` in the workspace storage
+2. Click a notepad to open and edit it as a `.np` file (Markdown format)
+3. Changes are automatically saved back to `notepads.json`
 4. Use toolbar buttons to create new notes or refresh the list
 
 **Database Storage Locations (for migration only):**
@@ -35,9 +35,9 @@ View and edit your deprecated Cursor Notepads directly in the Explorer sidebar. 
 - Linux: `~/.config/Cursor/User/workspaceStorage/{workspace-id}/`
 
 **Notepad File Location:**
-- `%APPDATA%\Cursor\User\workspaceStorage\{workspace-id}\notepads.json` (Windows)
-- `~/Library/Application Support/Cursor/User/workspaceStorage/{workspace-id}/notepads.json` (macOS)
-- `~/.config/Cursor/User/workspaceStorage/{workspace-id}/notepads.json` (Linux)
+- Windows: `%APPDATA%\Cursor\User\workspaceStorage\{workspace-id}\notepads.json`
+- macOS: `~/Library/Application Support/Cursor/User/workspaceStorage/{workspace-id}/notepads.json`
+- Linux: `~/.config/Cursor/User/workspaceStorage/{workspace-id}/notepads.json`
 
 **JSON File Structure:**
 ```json
@@ -83,25 +83,24 @@ When enabled, you'll see notifications for:
 ## 📝 Usage
 
 ### Creating a New Note
-1. Click the "+" button in the Notepads view
-2. Enter a name for your note
-3. The note will be created and you can start editing
+1. Click the "+" button in the Notepads view toolbar
+2. Enter a name for your note (defaults to "New Notepad")
+3. The note will be created and appears in the list
 
 ### Editing a Note
-1. Click on any notepad in the list
-2. Edit the content in the opened editor
-3. Save the file (`Ctrl+S` or `Cmd+S`)
-4. A confirmation message will appear
+1. Click on any notepad in the list to open it
+2. Edit the content in the opened editor (`.np` file with Markdown syntax highlighting)
+3. Save the file with `Ctrl+S` (Windows/Linux) or `Cmd+S` (macOS)
+4. Changes are automatically saved to `notepads.json` (verbose notifications can be enabled in settings)
 
 ### Renaming a Note
-1. Right-click on a notepad
-2. Select "Rename"
-3. Enter the new name
+1. Click the ✏️ (edit) icon next to any notepad
+2. Enter the new name in the input box
+3. Press Enter or click OK
 
 ### Deleting a Note
-1. Right-click on a notepad
-2. Select "Delete"
-3. Confirm the deletion
+1. Click the 🗑️ (trash) icon next to any notepad
+2. Confirm the deletion in the modal dialog
 
 ### Reordering Notes (Drag & Drop)
 1. Click and hold on any notepad item
@@ -131,12 +130,12 @@ When enabled, you'll see notifications for:
 
 **Empty notepad list:**
 - Your workspace may not have any notepads stored in Cursor's database
-- Create a new note using the "+" button
-- Enable debug logs to see detailed information
+- Create a new note using the "+" button in the toolbar
+- Check the Output panel (see Troubleshooting tips below) for detailed information
 
 **Migration didn't work:**
 - Ensure the workspace was used in Cursor before and had notepads
-- Check debug logs for migration messages
+- Check the Output panel for migration messages
 - You can still create new notes even if migration fails
 
 **Troubleshooting tips:**
@@ -148,6 +147,13 @@ When enabled, you'll see notifications for:
 ## 📝 License
 
 MIT License - See [LICENSE.md](LICENSE.md) for details
+
+## 💡 Technical Details
+
+- **File Format**: Notepads are saved as `.np` files (Notepad format)
+- **Syntax Highlighting**: `.np` files use Markdown syntax highlighting
+- **Storage Location**: Files are stored in VSCode's workspace storage directory
+- **Icon**: Notepads display with a 📝 notepad icon in the Explorer sidebar
 
 ## 🔗 Links
 

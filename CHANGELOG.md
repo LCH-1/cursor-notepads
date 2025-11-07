@@ -2,6 +2,9 @@
 
 All notable changes to the "cursor-notepads" extension will be documented in this file.
 
+## [0.2.1] - 2024-11-07
+- Update README.md
+
 ## [0.2.0] - 2024-11-06
 
 ### Added

@@ -3,7 +3,7 @@
   "displayName": "Cursor Notepads",
   "description": "View, create, and edit your deprecated Cursor Notepads with automatic migration to JSON",
   "publisher": "lch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "icon": "cursor-notepad.png",
   "engines": {
     "vscode": "^1.76.0"
