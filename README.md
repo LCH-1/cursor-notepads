@@ -1,8 +1,8 @@
-# Cursor Notepads
+# Notepads
 
-View and edit your deprecated Cursor Notepads directly in the Explorer sidebar. This extension migrates your workspace notepads from Cursor's internal database to an editable JSON file.
+Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally migrate existing notepads from Cursor's database.
 
-![Cursor Notepads](cursor-notepad.png)
+![Notepads](notepad.png)
 
 ## ✨ Features
 
@@ -140,7 +140,7 @@ When enabled, you'll see notifications for:
 
 **Troubleshooting tips:**
 1. Open Output panel: `Ctrl+Shift+U` (Windows/Linux) or `Cmd+Shift+U` (Mac)
-2. Select "Cursor Notepads" from the dropdown to view logs
+2. Select "Notepads" from the dropdown to view logs
 3. Look for `[storageUri] ✓ found workspace id` to confirm successful detection
 4. Enable `cursorNotepads.verbose` if you want to see all action notifications
 
@@ -163,4 +163,4 @@ MIT License - See [LICENSE.md](LICENSE.md) for details
 
 ## 🙏 Acknowledgments
 
-This extension was created to preserve access to Cursor's deprecated notepad feature.
+This extension can migrate notepads from Cursor's deprecated notepad feature; it also works as a standalone notepads app in VS Code and Cursor.

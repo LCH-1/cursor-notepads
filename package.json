@@ -1,10 +1,10 @@
 {
   "name": "cursor-notepads",
-  "displayName": "Cursor Notepads",
-  "description": "View, create, and edit your deprecated Cursor Notepads with automatic migration to JSON",
+  "displayName": "Notepads",
+  "description": "Notepads in the Explorer sidebar — create, edit",
   "publisher": "lch",
-  "version": "0.2.1",
-  "icon": "cursor-notepad.png",
+  "version": "1.0.0",
+  "icon": "notepad.png",
   "engines": {
     "vscode": "^1.76.0"
   },
@@ -16,7 +16,7 @@
     "notepads",
     "note",
     "notes",
-    "cursor-notepad"
+    "notepad"
   ],
   "main": "./out/extension.js",
   "contributes": {
