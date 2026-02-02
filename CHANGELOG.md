@@ -1,11 +1,16 @@
 # Change Log
 
-All notable changes to the "cursor-notepads" extension will be documented in this file.
+All notable changes to the "Notepads" extension will be documented in this file.
 
-## [0.2.1] - 2024-11-07
-- Update README.md
+## [1.0.0] - 2026-02-02
 
-## [0.2.0] - 2024-11-06
+### Changed
+- **Version**: Bumped to 1.0.0
+- **Display name**: Extension now appears as "Notepads" in the marketplace and Extensions view (package name stays `cursor-notepads` for same extension ID / seamless updates)
+- **Description**: Updated to position as standalone notepads app
+- README and docs updated for Notepads branding
+
+## [0.2.0] - 2025-11-06
 
 ### Added
 - **Full edit support**: Create, edit, rename, and delete notepads
@@ -34,6 +39,6 @@ All notable changes to the "cursor-notepads" extension will be documented in thi
 
 ## [0.1.0] - Initial Release
 
-- Read-only access to Cursor Notepads
+- Read-only access to notepads
 - Explorer sidebar integration
 - Markdown preview support

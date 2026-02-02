@@ -384,7 +384,7 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
         if (migrated) {
           log('[scan] migration successful -', notes.length, 'notes saved to', jsonPath);
           vscode.window.showInformationMessage(
-            `Cursor Notepads: Successfully migrated ${notes.length} note(s) to notepads.json`
+            `Notepads: Successfully migrated ${notes.length} note(s) to notepads.json`
           );
         }
       }
@@ -399,7 +399,7 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
 
 export async function activate(ctx: vscode.ExtensionContext) {
 
-  outputChannel = vscode.window.createOutputChannel('Cursor Notepads');
+  outputChannel = vscode.window.createOutputChannel('Notepads');
   ctx.subscriptions.push(outputChannel);
 
   VERBOSE = !!vscode.workspace.getConfiguration('cursorNotepads').get('verbose', false);
