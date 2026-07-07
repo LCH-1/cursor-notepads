@@ -1,7 +1,7 @@
 {
   "name": "cursor-notepads",
   "displayName": "Notepads",
-  "description": "Notepads in the Explorer sidebar — create, edit",
+  "description": "Notepads in the Explorer sidebar — create, edit, and manage notes.",
   "publisher": "lch",
   "version": "1.0.0",
   "icon": "notepad.png",
@@ -15,8 +15,7 @@
     "notepad",
     "notepads",
     "note",
-    "notes",
-    "notepad"
+    "notes"
   ],
   "main": "./out/extension.js",
   "contributes": {
