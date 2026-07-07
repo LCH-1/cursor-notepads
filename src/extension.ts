@@ -453,7 +453,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   ctx.subscriptions.push(vscode.commands.registerCommand('cnp.openNote', async (note: Notepad) => {
     try {
-      const fileName = sanitizeFileName(note.name || note.id) + '.np';
+      const fileName = sanitizeFileName(note.id) + '.np';
       const tmpDir = ctx.globalStorageUri.fsPath;
       await fs.mkdir(tmpDir, { recursive: true });
 
