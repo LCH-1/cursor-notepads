@@ -76,6 +76,10 @@ function decodeBlob(value: any): string | undefined {
 
 type Notepad = { id: string; name: string; text: string };
 
+function generateNoteId(): string {
+  return Date.now().toString() + Math.random().toString(36).substring(2, 9);
+}
+
 
 const MAX_FILENAME_LENGTH = 80;
 const MAX_SUMMARY_LENGTH = 60;
@@ -112,12 +116,26 @@ async function readNotepadsFromJson(ctx: vscode.ExtensionContext): Promise<Notep
     let notes: Notepad[] = [];
 
     if (Array.isArray(data)) {
-      // New array format
-      notes = data.map(n => ({
-        id: typeof n.id === 'string' ? n.id : String(Date.now()),
-        name: typeof n.name === 'string' ? n.name : '(untitled)',
-        text: typeof n.text === 'string' ? n.text : ''
-      }));
+      let needsIdMigration = false;
+      notes = data.map(n => {
+        if (typeof n.id === 'string') {
+          return {
+            id: n.id,
+            name: typeof n.name === 'string' ? n.name : '(untitled)',
+            text: typeof n.text === 'string' ? n.text : ''
+          };
+        }
+        needsIdMigration = true;
+        return {
+          id: generateNoteId(),
+          name: typeof n.name === 'string' ? n.name : '(untitled)',
+          text: typeof n.text === 'string' ? n.text : ''
+        };
+      });
+      if (needsIdMigration) {
+        await writeNotepadsToJson(ctx, notes);
+        log('[readNotepadsFromJson] assigned missing ids and persisted');
+      }
     } else if (data.notepads && typeof data.notepads === 'object') {
       // Old object format - migrate to array
       for (const key of Object.keys(data.notepads)) {
@@ -156,7 +174,9 @@ async function writeNotepadsToJson(ctx: vscode.ExtensionContext, notes: Notepad[
     await fs.mkdir(dirPath, { recursive: true });
 
     // Save as array format (simpler structure)
-    await fs.writeFile(jsonPath, JSON.stringify(notes, null, 2), 'utf-8');
+    const tmpPath = jsonPath + '.tmp';
+    await fs.writeFile(tmpPath, JSON.stringify(notes, null, 2), 'utf-8');
+    await fs.rename(tmpPath, jsonPath);
     log('[writeNotepadsToJson] saved', notes.length, 'notes to', jsonPath);
     return true;
   } catch (e) {
@@ -295,7 +315,7 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
 
   async addNote(name: string, text: string): Promise<boolean> {
     const newNote: Notepad = {
-      id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
+      id: generateNoteId(),
       name,
       text
     };
