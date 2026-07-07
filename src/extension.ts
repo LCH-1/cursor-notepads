@@ -80,6 +80,8 @@ function generateNoteId(): string {
   return Date.now().toString() + Math.random().toString(36).substring(2, 9);
 }
 
+const noteIdByTmpFile = new Map<string, string>();
+
 
 const MAX_FILENAME_LENGTH = 80;
 const MAX_SUMMARY_LENGTH = 60;
@@ -450,6 +452,22 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
   await provider.init();
 
+  ctx.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument(async savedDoc => {
+      const noteId = noteIdByTmpFile.get(savedDoc.uri.fsPath);
+      if (!noteId) {
+        return;
+      }
+      const current = provider.getNoteById(noteId);
+      if (!current) {
+        return;
+      }
+      const success = await provider.updateNote(noteId, current.name, savedDoc.getText());
+      if (success && VERBOSE) {
+        vscode.window.showInformationMessage(`Note "${current.name}" saved`);
+      }
+    })
+  );
 
   ctx.subscriptions.push(vscode.commands.registerCommand('cnp.openNote', async (note: Notepad) => {
     try {
@@ -458,6 +476,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
       await fs.mkdir(tmpDir, { recursive: true });
 
       const tmpFile = path.join(tmpDir, fileName);
+      noteIdByTmpFile.set(tmpFile, note.id);
       await fs.writeFile(tmpFile, note.text, 'utf-8');
 
       const uri = vscode.Uri.file(tmpFile);
@@ -466,17 +485,6 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
       // Set language mode to markdown
       await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
-
-      const saveListener = vscode.workspace.onDidSaveTextDocument(async savedDoc => {
-        if (savedDoc.uri.fsPath === tmpFile) {
-          const newText = savedDoc.getText();
-          await provider.updateNote(note.id, note.name, newText);
-          if (VERBOSE) {
-            vscode.window.showInformationMessage(`Note "${note.name}" saved`);
-          }
-        }
-      });
-      ctx.subscriptions.push(saveListener);
     } catch (e) {
       warn('openNote failed', e);
       vscode.window.showErrorMessage('Failed to open note');
