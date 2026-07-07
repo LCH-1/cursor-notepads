@@ -466,6 +466,14 @@ export async function activate(ctx: vscode.ExtensionContext) {
       if (success && VERBOSE) {
         vscode.window.showInformationMessage(`Note "${current.name}" saved`);
       }
+    }),
+    vscode.workspace.onDidCloseTextDocument(async closedDoc => {
+      const tmpFile = closedDoc.uri.fsPath;
+      if (!noteIdByTmpFile.has(tmpFile)) {
+        return;
+      }
+      noteIdByTmpFile.delete(tmpFile);
+      await fs.unlink(tmpFile);
     })
   );
 
