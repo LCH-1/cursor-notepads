@@ -284,13 +284,20 @@ class NotepadTreeProvider implements vscode.TreeDataProvider<NotepadItem> {
     const sourceIndex = this.notepads.findIndex(n => n.id === sourceNote.id);
     if (sourceIndex === -1) return;
 
+    if (target && target.note.id === sourceNote.id) {
+      return;
+    }
+
     // Remove from original position
     this.notepads.splice(sourceIndex, 1);
 
     if (target) {
-      // Insert before target
       const targetIndex = this.notepads.findIndex(n => n.id === target.note.id);
-      this.notepads.splice(targetIndex, 0, sourceNote);
+      if (targetIndex === -1) {
+        this.notepads.push(sourceNote);
+      } else {
+        this.notepads.splice(targetIndex, 0, sourceNote);
+      }
     } else {
       // Drop at end
       this.notepads.push(sourceNote);
