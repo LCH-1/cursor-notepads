@@ -108,6 +108,9 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p . && cpx node_modules/sql.js/dist/sql-wasm.wasm out",
     "watch": "tsc -w",
+    "pretest": "npm run compile",
+    "test": "vscode-test",
+    "lint": "eslint src",
     "package": "npx vsce package",
     "publish": "npm run compile && npx vsce publish",
     "publish:patch": "npm run compile && npx vsce publish patch",
@@ -119,7 +122,12 @@
     "@types/node": "^22.19.0",
     "@types/sql.js": "^1.4.9",
     "@types/vscode": "^1.76.0",
+    "@typescript-eslint/eslint-plugin": "^8.46.0",
+    "@typescript-eslint/parser": "^8.46.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
     "cpx": "^1.5.0",
+    "eslint": "^9.37.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
