@@ -105,6 +105,7 @@
     "url": "https://github.com/LCH-1/cursor-notepads"
   },
   "scripts": {
+    "vscode:prepublish": "npm run compile",
     "compile": "tsc -p . && cpx node_modules/sql.js/dist/sql-wasm.wasm out",
     "watch": "tsc -w",
     "package": "npx vsce package",
