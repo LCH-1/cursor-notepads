@@ -2,6 +2,22 @@
 
 All notable changes to the "Notepads" extension will be documented in this file.
 
+## [1.1.0] - 2026-07-08
+
+### Fixed
+- Use note id for temp editing file names to avoid content collisions (#1)
+- Single save listener keyed by temp file path; rename no longer reverts on save (#2)
+- Ignore self-drop in drag-and-drop reordering (#3)
+- Assign unique ids to notes missing id on load (#4)
+- Delete temp note files when their editor closes (#5)
+- Compile extension before release publish (#6)
+- Write notepads.json atomically via temp file and rename (#7)
+
+### Changed
+- Add runnable VS Code test harness and scripts (#8)
+- Add ESLint dependencies and lint script (#9)
+- Complete package.json description and deduplicate keywords (#10)
+
 ## [1.0.0] - 2026-02-02
 
 ### Changed
