@@ -238,6 +238,41 @@ function sanitizeFileName(name: string): string {
   return name.replace(/[\\\/:\*\?"<>\|]/g, '_').slice(0, MAX_FILENAME_LENGTH) || 'note';
 }
 
+function getNoteTmpFilePath(tmpDir: string, note: Notepad): string {
+  const noteDir = path.join(tmpDir, sanitizeFileName(note.id));
+  const fileName = sanitizeFileName(note.name) + '.np';
+  return path.join(noteDir, fileName);
+}
+
+function forEachOpenNoteTab(callback: (tab: vscode.Tab, noteId: string) => void): void {
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const input = tab.input;
+      if (input instanceof vscode.TabInputText) {
+        const noteId = noteIdByTmpFile.get(input.uri.fsPath);
+        if (noteId) {
+          callback(tab, noteId);
+        }
+      }
+    }
+  }
+}
+
+async function updateOpenNoteTabLabel(noteId: string, label: string): Promise<void> {
+  const tabGroups = vscode.window.tabGroups as vscode.TabGroups & {
+    renameTab?: (tab: vscode.Tab, label: string) => Thenable<void>;
+  };
+  if (!tabGroups.renameTab) {
+    return;
+  }
+
+  forEachOpenNoteTab((tab, openNoteId) => {
+    if (openNoteId === noteId) {
+      void tabGroups.renameTab!(tab, label);
+    }
+  });
+}
+
 function summarizeText(text: string): string {
   const firstLine = (text || '').split(/\r?\n/)[0] ?? '';
   const trimmed = firstLine.trim();
@@ -474,16 +509,18 @@ export async function activate(ctx: vscode.ExtensionContext) {
       }
       noteIdByTmpFile.delete(tmpFile);
       await fs.unlink(tmpFile);
+      try {
+        await fs.rmdir(path.dirname(tmpFile));
+      } catch { }
     })
   );
 
   ctx.subscriptions.push(vscode.commands.registerCommand('cnp.openNote', async (note: Notepad) => {
     try {
-      const fileName = sanitizeFileName(note.id) + '.np';
       const tmpDir = ctx.globalStorageUri.fsPath;
-      await fs.mkdir(tmpDir, { recursive: true });
+      const tmpFile = getNoteTmpFilePath(tmpDir, note);
+      await fs.mkdir(path.dirname(tmpFile), { recursive: true });
 
-      const tmpFile = path.join(tmpDir, fileName);
       noteIdByTmpFile.set(tmpFile, note.id);
       await fs.writeFile(tmpFile, note.text, 'utf-8');
 
@@ -559,6 +596,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
     const success = await provider.updateNote(item.note.id, newName, item.note.text);
     if (success) {
+      await updateOpenNoteTabLabel(item.note.id, newName);
       if (VERBOSE) {
         vscode.window.showInformationMessage(`Note renamed to "${newName}"`);
       }

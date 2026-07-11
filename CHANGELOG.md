@@ -2,6 +2,12 @@
 
 All notable changes to the "Notepads" extension will be documented in this file.
 
+## [1.1.1] - 2026-07-11
+
+### Fixed
+- Show notepad name in editor tabs instead of internal note id
+- Update open tab label when a notepad is renamed (when supported by the editor)
+
 ## [1.1.0] - 2026-07-08
 
 ### Fixed
