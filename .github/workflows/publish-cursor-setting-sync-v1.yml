@@ -1,0 +1,69 @@
+name: Publish Cursor Setting Sync 1.0.0
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-cursor-setting-sync-v1.0.0
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify and publish Cursor Setting Sync 1.0.0
+    runs-on: ubuntu-24.04
+    env:
+      CI: "true"
+      REQUIRE_SQLITE_BACKUP: "1"
+      EXPECTED_SHA: 1d1542a325baeec1246c96737eb3514c0c39a379
+      VSIX_NAME: cursor-setting-sync-1.0.0.vsix
+
+    steps:
+      - name: Check out the exact Cursor Setting Sync release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: LCH-1/cursor-setting-sync
+          ref: 1d1542a325baeec1246c96737eb3514c0c39a379
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify immutable release identity
+        shell: bash
+        run: |
+          [[ "$(git rev-parse HEAD)" == "$EXPECTED_SHA" ]]
+          [[ "$(node -p "require('./package.json').name")" == "cursor-setting-sync" ]]
+          [[ "$(node -p "require('./package.json').publisher")" == "lch" ]]
+          [[ "$(node -p "require('./package.json').version")" == "1.0.0" ]]
+
+      - run: npm run verify
+
+      - name: Package the verified VSIX
+        shell: bash
+        run: npx vsce package --out "$VSIX_NAME"
+
+      - name: Record artifact checksum
+        shell: bash
+        run: sha256sum "$VSIX_NAME"
+
+      - name: Publish to Open VSX
+        uses: HaaLeo/publish-vscode-extension@4004fc217b5ac892b15a1c3cbe6458de97242dde # v2
+        with:
+          pat: ${{ secrets.OPEN_VSX_TOKEN }}
+          extensionFile: cursor-setting-sync-1.0.0.vsix
+          skipDuplicate: true
+
+      - name: Publish to Visual Studio Marketplace
+        uses: HaaLeo/publish-vscode-extension@4004fc217b5ac892b15a1c3cbe6458de97242dde # v2
+        with:
+          pat: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+          extensionFile: cursor-setting-sync-1.0.0.vsix
+          registryUrl: https://marketplace.visualstudio.com
+          skipDuplicate: true
