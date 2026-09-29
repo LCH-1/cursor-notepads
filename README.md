@@ -11,6 +11,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 - **Drag & Drop Reordering**: Easily reorder notes by dragging them to new positions
 - **Automatic Migration**: Seamlessly migrates existing notepads from Cursor's database
 - **Markdown Editing**: Edit notepads as Markdown documents
+- **Clean Tab Labels**: Hide the `.np` extension in editor tabs by default (VS Code 1.88+ or a Cursor version based on it)
 - **JSON Array Storage**: Clean, simple array-based storage format
 - **Fast & Efficient**: Uses VS Code's storage API to directly locate workspace data (O(1) lookup)
 - **Privacy-First**: All data stays local - no network access, no telemetry
@@ -62,6 +63,8 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 - The extension works completely offline
 
 ## ⚙️ Settings
+
+The extension supplies default editor labels for `.np` files, so no manual Cursor settings are needed to hide the extension in tabs. Explicit user or workspace custom-label settings take precedence. This uses `${filename}`, which also omits dot-separated suffixes in note names (for example, `meeting.notes.np` appears as `meeting`).
 
 - `cursorNotepads.verbose`: Show verbose notifications for all actions (default: `false`)
 

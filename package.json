@@ -19,6 +19,12 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "configurationDefaults": {
+      "workbench.editor.customLabels.enabled": true,
+      "workbench.editor.customLabels.patterns": {
+        "**/*.np": "${filename}"
+      }
+    },
     "languages": [
       {
         "id": "markdown",
