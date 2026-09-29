@@ -240,7 +240,7 @@ function sanitizeFileName(name: string): string {
 
 function getNoteTmpFilePath(tmpDir: string, note: Notepad): string {
   const noteDir = path.join(tmpDir, sanitizeFileName(note.id));
-  const fileName = sanitizeFileName(note.name) + '.np';
+  const fileName = sanitizeFileName(note.name).replace(/[. ]+$/, '') || 'note';
   return path.join(noteDir, fileName);
 }
 
@@ -521,15 +521,13 @@ export async function activate(ctx: vscode.ExtensionContext) {
       const tmpFile = getNoteTmpFilePath(tmpDir, note);
       await fs.mkdir(path.dirname(tmpFile), { recursive: true });
 
-      noteIdByTmpFile.set(tmpFile, note.id);
       await fs.writeFile(tmpFile, note.text, 'utf-8');
 
       const uri = vscode.Uri.file(tmpFile);
-      const doc = await vscode.workspace.openTextDocument(uri);
+      const openedDoc = await vscode.workspace.openTextDocument(uri);
+      const doc = await vscode.languages.setTextDocumentLanguage(openedDoc, 'markdown');
+      noteIdByTmpFile.set(tmpFile, note.id);
       await vscode.window.showTextDocument(doc, { preview: false });
-
-      // Set language mode to markdown
-      await vscode.languages.setTextDocumentLanguage(doc, 'markdown');
     } catch (e) {
       warn('openNote failed', e);
       vscode.window.showErrorMessage('Failed to open note');

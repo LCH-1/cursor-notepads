@@ -11,7 +11,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 - **Drag & Drop Reordering**: Easily reorder notes by dragging them to new positions
 - **Automatic Migration**: Seamlessly migrates existing notepads from Cursor's database
 - **Markdown Editing**: Edit notepads as Markdown documents
-- **Clean Tab Labels**: Hide the `.np` extension in editor tabs by default (VS Code 1.88+ or a Cursor version based on it)
+- **Clean Tab Labels**: Show note titles in editor tabs without an added `.np` suffix, preserving dots within titles
 - **JSON Array Storage**: Clean, simple array-based storage format
 - **Fast & Efficient**: Uses VS Code's storage API to directly locate workspace data (O(1) lookup)
 - **Privacy-First**: All data stays local - no network access, no telemetry
@@ -26,7 +26,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 ### After Migration
 1. All notepad data is read from `notepads.json` in the workspace storage
-2. Click a notepad to open and edit it as a `.np` file (Markdown format)
+2. Click a notepad to open and edit a temporary file named after its title (Markdown format)
 3. Changes are automatically saved back to `notepads.json`
 4. Use toolbar buttons to create new notes or refresh the list
 
@@ -64,7 +64,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 ## ⚙️ Settings
 
-The extension supplies default editor labels for `.np` files, so no manual Cursor settings are needed to hide the extension in tabs. Explicit user or workspace custom-label settings take precedence. This uses `${filename}`, which also omits dot-separated suffixes in note names (for example, `meeting.notes.np` appears as `meeting`).
+Note tabs use the note title without adding a `.np` suffix, so `meeting.notes` stays `meeting.notes`. No manual Cursor settings are needed. Markdown mode is assigned when the note opens. Characters that are invalid in file names are replaced, and trailing dots or spaces are removed for Windows compatibility.
 
 - `cursorNotepads.verbose`: Show verbose notifications for all actions (default: `false`)
 
@@ -92,7 +92,7 @@ When enabled, you'll see notifications for:
 
 ### Editing a Note
 1. Click on any notepad in the list to open it
-2. Edit the content in the opened editor (`.np` file with Markdown syntax highlighting)
+2. Edit the content in the opened editor with Markdown syntax highlighting
 3. Save the file with `Ctrl+S` (Windows/Linux) or `Cmd+S` (macOS)
 4. Changes are automatically saved to `notepads.json` (verbose notifications can be enabled in settings)
 
@@ -153,8 +153,8 @@ MIT License - See [LICENSE.md](LICENSE.md) for details
 
 ## 💡 Technical Details
 
-- **File Format**: Notepads are saved as `.np` files (Notepad format)
-- **Syntax Highlighting**: `.np` files use Markdown syntax highlighting
+- **File Format**: Notes are stored in `notepads.json`; temporary editing files use sanitized note titles without an added extension
+- **Syntax Highlighting**: Temporary editing files are explicitly opened in Markdown mode
 - **Storage Location**: Files are stored in VSCode's workspace storage directory
 - **Icon**: Notepads display with a 📝 notepad icon in the Explorer sidebar
 
