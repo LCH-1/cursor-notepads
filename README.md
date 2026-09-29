@@ -66,6 +66,8 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 Note tabs use the note title without adding a `.np` suffix, so `meeting.notes` stays `meeting.notes`. No manual Cursor settings are needed. Markdown mode is assigned when the note opens. Characters that are invalid in file names are replaced, and trailing dots or spaces are removed for Windows compatibility.
 
+This only affects notes opened from the Notepads view. Ordinary `.np` files and other files keep their names. After updating, reload the editor window and reopen existing notes from the Notepads view to apply the new tab names.
+
 - `cursorNotepads.verbose`: Show verbose notifications for all actions (default: `false`)
 
 To enable verbose notifications:
