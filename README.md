@@ -12,6 +12,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 - **Automatic Migration**: Seamlessly migrates existing notepads from Cursor's database
 - **Markdown Editing**: Edit notepads as Markdown documents
 - **Clean Tab Labels**: Show note titles in editor tabs without an added `.np` suffix, preserving dots within titles
+- **Notepad Tab Icons**: Show the Notepads icon while retaining the normal text editor and other file icons
 - **JSON Array Storage**: Clean, simple array-based storage format
 - **Fast & Efficient**: Uses VS Code's storage API to directly locate workspace data (O(1) lookup)
 - **Privacy-First**: All data stays local - no network access, no telemetry
@@ -26,7 +27,7 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 ### After Migration
 1. All notepad data is read from `notepads.json` in the workspace storage
-2. Click a notepad to open and edit a temporary file named after its title (Markdown format)
+2. Click a notepad to open it in the normal Markdown text editor
 3. Changes are automatically saved back to `notepads.json`
 4. Use toolbar buttons to create new notes or refresh the list
 
@@ -64,11 +65,14 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 ## ⚙️ Settings
 
-Note tabs use the note title without adding a `.np` suffix, so `meeting.notes` stays `meeting.notes`. No manual Cursor settings are needed. Markdown mode is assigned when the note opens. Characters that are invalid in file names are replaced, and trailing dots or spaces are removed for Windows compatibility.
+Note tabs use the full note title without adding a `.np` suffix, so `meeting.notes` stays `meeting.notes`. No manual Cursor settings are needed. Markdown mode is assigned when the note opens.
+
+Notepad tab icons are enabled by default. The extension creates a copy of your selected file icon theme with a Notepads icon added and automatically selects that copy. Other file icons are preserved. To turn this off and restore the original theme, run **Notepads: Restore Original File Icons** or disable `cursorNotepads.noteTabIcon` before uninstalling the extension.
 
 This only affects notes opened from the Notepads view. Ordinary `.np` files and other files keep their names. After updating, reload the editor window and reopen existing notes from the Notepads view to apply the new tab names.
 
 - `cursorNotepads.verbose`: Show verbose notifications for all actions (default: `false`)
+- `cursorNotepads.noteTabIcon`: Show a Notepads icon on note tabs (default: `true`)
 
 To enable verbose notifications:
 ```json
@@ -126,6 +130,7 @@ When enabled, you'll see notifications for:
 - **Workspace-specific**: Only shows notepads for the currently open workspace
 - **Single workspace**: Uses the first workspace folder if multiple are open
 - **One-time migration**: Database is only read once when `notepads.json` doesn't exist
+- **Tab icons**: Requires writable local extension files and a local file icon theme. Up to 16 original themes can be retained. Unsupported themes keep their original icons. Monochrome themes may also display the note icon in a single color.
 
 ## 🐛 Troubleshooting
 
@@ -155,8 +160,8 @@ MIT License - See [LICENSE.md](LICENSE.md) for details
 
 ## 💡 Technical Details
 
-- **File Format**: Notes are stored in `notepads.json`; temporary editing files use sanitized note titles without an added extension
-- **Syntax Highlighting**: Temporary editing files are explicitly opened in Markdown mode
+- **File Format**: Notes are stored in `notepads.json`; editing uses managed virtual files with titles independent of their internal paths
+- **Syntax Highlighting**: Notes are explicitly opened in Markdown mode
 - **Storage Location**: Files are stored in VSCode's workspace storage directory
 - **Icon**: Notepads display with a 📝 notepad icon in the Explorer sidebar
 

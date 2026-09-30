@@ -3,7 +3,7 @@
   "displayName": "Notepads",
   "description": "Notepads in the Explorer sidebar — create, edit, and manage notes.",
   "publisher": "lch",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "icon": "notepad.png",
   "engines": {
     "vscode": "^1.76.0"
@@ -58,6 +58,11 @@
         "command": "cnp.renameNote",
         "title": "Rename",
         "icon": "$(edit)"
+      },
+      {
+        "command": "cnp.restoreOriginalIconTheme",
+        "title": "Restore Original File Icons",
+        "category": "Notepads"
       }
     ],
     "menus": {
@@ -93,9 +98,112 @@
           "type": "boolean",
           "default": false,
           "description": "Show verbose notifications for all actions (create, save, delete, rename)"
+        },
+        "cursorNotepads.noteTabIcon": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notebook icon on Notepads editor tabs while preserving other file icons."
         }
       }
-    }
+    },
+    "iconThemes": [
+      {
+        "id": "cnp-notepad-icons-0",
+        "label": "Notepads Icons 1",
+        "path": "./themes/notepads-0.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-1",
+        "label": "Notepads Icons 2",
+        "path": "./themes/notepads-1.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-2",
+        "label": "Notepads Icons 3",
+        "path": "./themes/notepads-2.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-3",
+        "label": "Notepads Icons 4",
+        "path": "./themes/notepads-3.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-4",
+        "label": "Notepads Icons 5",
+        "path": "./themes/notepads-4.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-5",
+        "label": "Notepads Icons 6",
+        "path": "./themes/notepads-5.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-6",
+        "label": "Notepads Icons 7",
+        "path": "./themes/notepads-6.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-7",
+        "label": "Notepads Icons 8",
+        "path": "./themes/notepads-7.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-8",
+        "label": "Notepads Icons 9",
+        "path": "./themes/notepads-8.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-9",
+        "label": "Notepads Icons 10",
+        "path": "./themes/notepads-9.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-10",
+        "label": "Notepads Icons 11",
+        "path": "./themes/notepads-10.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-11",
+        "label": "Notepads Icons 12",
+        "path": "./themes/notepads-11.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-12",
+        "label": "Notepads Icons 13",
+        "path": "./themes/notepads-12.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-13",
+        "label": "Notepads Icons 14",
+        "path": "./themes/notepads-13.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-14",
+        "label": "Notepads Icons 15",
+        "path": "./themes/notepads-14.json",
+        "_watch": true
+      },
+      {
+        "id": "cnp-notepad-icons-15",
+        "label": "Notepads Icons 16",
+        "path": "./themes/notepads-15.json",
+        "_watch": true
+      }
+    ]
   },
   "extensionKind": [
     "ui"
@@ -131,6 +239,11 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "jsonc-parser": "^3.3.1",
     "sql.js": "^1.13.0"
-  }
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onFileSystem:cnp-notepad"
+  ]
 }

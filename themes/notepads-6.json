@@ -1,0 +1,11 @@
+{
+  "iconDefinitions": {
+    "_cnp_notepad": {
+      "iconPath": "../notepad.png"
+    }
+  },
+  "fileNames": {
+    "lch-cursor-notepads-editor-7f4e19/note": "_cnp_notepad"
+  },
+  "showLanguageModeIcons": false
+}
