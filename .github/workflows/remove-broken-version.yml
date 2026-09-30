@@ -55,16 +55,17 @@ jobs:
         if: steps.before.outputs.openvsx == 'true'
         env:
           OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}
-        run: pnpm dlx ovsx@1.2.0 unpublish lch.cursor-notepads --versions 1.2.2 --force
+        run: pnpm --config.ignore-scripts=true --config.strictDepBuilds=false dlx ovsx@1.2.0 unpublish lch.cursor-notepads --versions 1.2.2 --force
 
       - name: Install Marketplace API client
-        if: steps.before.outputs.marketplace == 'true'
+        id: marketplace_client
+        if: ${{ !cancelled() && steps.before.conclusion == 'success' && steps.before.outputs.marketplace == 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/notepads-version-removal"
-          pnpm add --dir "$RUNNER_TEMP/notepads-version-removal" --ignore-scripts azure-devops-node-api@17.0.1
+          pnpm --config.strictDepBuilds=false add --dir "$RUNNER_TEMP/notepads-version-removal" --ignore-scripts azure-devops-node-api@17.0.1
 
       - name: Remove only Marketplace version 1.2.2
-        if: steps.before.outputs.marketplace == 'true'
+        if: ${{ !cancelled() && steps.before.conclusion == 'success' && steps.marketplace_client.conclusion == 'success' && steps.before.outputs.marketplace == 'true' }}
         env:
           VS_MARKETPLACE_TOKEN: ${{ secrets.VS_MARKETPLACE_TOKEN }}
           NODE_PATH: ${{ runner.temp }}/notepads-version-removal/node_modules
