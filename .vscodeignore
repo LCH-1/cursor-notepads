@@ -5,6 +5,10 @@ dist/**
 src/**
 scripts/**
 out/test/**
+notepads/**
+.github/**
+pnpm-lock.yaml
+**/*.py
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
