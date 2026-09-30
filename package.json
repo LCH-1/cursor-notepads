@@ -3,7 +3,7 @@
   "displayName": "Notepads",
   "description": "Notepads in the Explorer sidebar — create, edit, and manage notes.",
   "publisher": "lch",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "icon": "notepad.png",
   "engines": {
     "vscode": "^1.76.0"
@@ -103,6 +103,24 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notebook icon on Notepads editor tabs while preserving other file icons."
+        },
+        "cursorNotepads.noteIconThemeSource": {
+          "type": ["object", "null"],
+          "default": null,
+          "scope": "window",
+          "description": "Original workspace file icon theme used to restore Notepads tab icons when workspace settings are copied.",
+          "required": ["source", "original"],
+          "properties": {
+            "source": { "type": ["string", "null"] },
+            "original": {
+              "type": "object",
+              "required": ["defined"],
+              "properties": {
+                "defined": { "type": "boolean" },
+                "value": { "type": ["string", "null"] }
+              }
+            }
+          }
         }
       }
     },
@@ -239,6 +257,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "iconv-lite": "0.6.3",
     "jsonc-parser": "^3.3.1",
     "sql.js": "^1.13.0"
   },

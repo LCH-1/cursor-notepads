@@ -10,6 +10,8 @@ async function main() {
   const resultFile = path.join(testRoot, 'result.json');
   const runnerFile = path.join(testRoot, 'runner.cjs');
   const runner = path.join(root, 'node_modules', '@vscode', 'test-cli', 'out', 'runner.cjs');
+  const testDirectory = path.join(root, 'out', 'test');
+  const testFiles = fs.readdirSync(testDirectory, { recursive: true }).filter(file => file.endsWith('.test.js')).map(file => path.join(testDirectory, file));
   const themeFiles = Array.from({ length: 16 }, (_, slot) => path.join(root, 'themes', `notepads-${slot}.json`));
   const originalThemes = themeFiles.map(file => fs.readFileSync(file));
   fs.mkdirSync(workspace, { recursive: true });
@@ -41,7 +43,7 @@ exports.run = async () => {
       extensionTestsEnv: {
         ELECTRON_RUN_AS_NODE: undefined,
         CNP_TEST_GLOBAL_STORAGE_DIR: path.join(userData, 'User', 'globalStorage', 'lch.cursor-notepads'),
-        VSCODE_TEST_OPTIONS: JSON.stringify({ mochaOpts: { timeout: 20000 }, files: [path.join(root, 'out', 'test', 'extension.test.js')], preload: [], colorDefault: false }),
+        VSCODE_TEST_OPTIONS: JSON.stringify({ mochaOpts: { timeout: 20000 }, files: testFiles, preload: [], colorDefault: false }),
       },
     });
   } catch (error) {

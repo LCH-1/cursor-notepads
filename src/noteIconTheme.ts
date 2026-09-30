@@ -11,9 +11,9 @@ export function themeId(slot: number): string {
 }
 
 type ThemeSetting = string | null;
-type SettingsTarget = 'global' | 'workspace';
 type OriginalValue = { defined: boolean; value?: ThemeSetting };
-type ThemeSelection = { slot: number; original: OriginalValue };
+type ThemeSelection = { slot: number; original: OriginalValue; source?: ThemeSetting; globalBase?: ThemeSetting; resume?: boolean };
+type SourceHint = { source: ThemeSetting; original: OriginalValue };
 type SlotState = {
   version: 1;
   slots: Record<string, number>;
@@ -27,6 +27,8 @@ const GLOBAL_SELECTION_KEY = 'noteIconTheme.globalSelection';
 const OWN_ICON_ID = '_cnp_notepad';
 const THEME_SETTING = 'workbench.iconTheme';
 const NOTE_ICON_SETTING = 'cursorNotepads.noteTabIcon';
+const SOURCE_SETTING_KEY = 'noteIconThemeSource';
+const SOURCE_SETTING = `cursorNotepads.${SOURCE_SETTING_KEY}`;
 
 function ownSlot(value: ThemeSetting): number | undefined {
   if (typeof value !== 'string') { return undefined; }
@@ -48,6 +50,24 @@ function restoredValue(original: OriginalValue): ThemeSetting | undefined {
   return original.defined ? original.value : undefined;
 }
 
+function isNativeTheme(value: unknown): value is ThemeSetting {
+  return value === null || (typeof value === 'string' && ownSlot(value) === undefined);
+}
+
+function isOriginalValue(value: unknown): value is OriginalValue {
+  if (typeof value !== 'object' || value === null || !('defined' in value) || typeof value.defined !== 'boolean') { return false; }
+  return !value.defined || ('value' in value && isNativeTheme(value.value));
+}
+
+function isSourceHint(value: unknown): value is SourceHint {
+  return typeof value === 'object' && value !== null && 'source' in value && isNativeTheme(value.source)
+    && 'original' in value && isOriginalValue(value.original);
+}
+
+function sameOriginal(left: OriginalValue, right: OriginalValue): boolean {
+  return left.defined === right.defined && (!left.defined || left.value === right.value);
+}
+
 export class NoteIconThemeController implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private pending: Promise<unknown> = Promise.resolve();
@@ -55,9 +75,12 @@ export class NoteIconThemeController implements vscode.Disposable {
   private disposed = false;
   private cachedTheme: CachedTheme | undefined;
   private readonly writtenThemes = new Map<number, ThemeDefinition>();
+  private readonly assetDirectories = new Map<string, string[]>();
   private sourceUri: string | undefined;
   private sourceWatchers: vscode.Disposable[] = [];
   private refreshTimer: NodeJS.Timeout | undefined;
+  private lastProblem: string | undefined;
+  private shutdownPromise: Promise<void> | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -66,46 +89,70 @@ export class NoteIconThemeController implements vscode.Disposable {
 
   public async start(): Promise<void> {
     this.disposables.push(vscode.workspace.onDidChangeConfiguration(event => {
-      if (event.affectsConfiguration(NOTE_ICON_SETTING) || event.affectsConfiguration(THEME_SETTING)) {
+      if (event.affectsConfiguration(NOTE_ICON_SETTING) || event.affectsConfiguration(THEME_SETTING) || event.affectsConfiguration(SOURCE_SETTING)) {
         void this.enqueue(async () => {
+          if (this.disposed) { return; }
+          await this.migrateGlobalTheme();
+          if (!this.hasWorkspace()) { return; }
           if (!this.enabled()) {
-            await this.restoreTheme();
-          } else if (event.affectsConfiguration(NOTE_ICON_SETTING) || this.active) {
+            if (event.affectsConfiguration(NOTE_ICON_SETTING)) { await this.restoreTheme(); }
+          } else if (event.affectsConfiguration(NOTE_ICON_SETTING) || this.active || this.hasOwnWorkspaceTheme()) {
             await this.activateTheme();
           }
-        }).catch(error => this.reportError(error));
+        }).catch(async error => {
+          this.reportError(error);
+          if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
+        });
       }
     }));
     this.disposables.push(vscode.extensions.onDidChange(() => this.scheduleRefresh()));
 
     await this.enqueue(async () => {
-      if (ownSlot(this.currentTheme()) === undefined) { return; }
+      if (this.disposed) { return; }
+      const wasSelected = ownSlot(this.currentTheme()) !== undefined;
+      await this.migrateGlobalTheme();
+      if (!this.hasWorkspace()) { return; }
       if (!this.enabled()) {
         await this.restoreTheme();
         return;
       }
-      await this.activateTheme();
-    }).catch(error => this.reportError(error));
+      const resume = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY)?.resume;
+      if (wasSelected || this.hasOwnWorkspaceTheme() || resume) { await this.activateTheme(); }
+    }).catch(async error => {
+      this.reportError(error);
+      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
+    });
   }
 
   public async ensureEnabled(): Promise<boolean> {
     return this.enqueue(async () => {
+      if (this.disposed) { return false; }
+      await this.migrateGlobalTheme();
+      if (!this.hasWorkspace()) { return false; }
       if (!this.enabled()) {
         await this.restoreTheme();
         return false;
       }
       return this.activateTheme();
-    }).catch(error => {
+    }).catch(async error => {
       this.reportError(error);
+      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
       return false;
     });
   }
 
   public dispose(): void {
+    void this.shutdown();
+  }
+
+  public shutdown(): Promise<void> {
+    if (this.shutdownPromise) { return this.shutdownPromise; }
     this.disposed = true;
     if (this.refreshTimer) { clearTimeout(this.refreshTimer); }
     for (const watcher of this.sourceWatchers) { watcher.dispose(); }
     for (const disposable of this.disposables) { disposable.dispose(); }
+    this.shutdownPromise = this.enqueue(() => this.restoreTheme(true)).catch(error => this.reportError(error));
+    return this.shutdownPromise;
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -122,37 +169,92 @@ export class NoteIconThemeController implements vscode.Disposable {
     return vscode.workspace.getConfiguration('workbench').get<ThemeSetting>('iconTheme') ?? null;
   }
 
-  private settingsTarget(): { target: SettingsTarget; original: OriginalValue } {
+  private hasWorkspace(): boolean {
+    return !!vscode.workspace.workspaceFolders?.length;
+  }
+
+  private hasOwnWorkspaceTheme(): boolean {
+    const value = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme')?.workspaceValue;
+    return value !== undefined && ownSlot(value) !== undefined;
+  }
+
+  private sourceHint(): SourceHint | undefined {
+    const value: unknown = vscode.workspace.getConfiguration('cursorNotepads').inspect(SOURCE_SETTING_KEY)?.workspaceValue;
+    return isSourceHint(value) ? value : undefined;
+  }
+
+  private globalTheme(): ThemeSetting {
     const setting = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme');
-    if (setting?.workspaceValue !== undefined) {
-      return { target: 'workspace', original: captureValue(setting.workspaceValue) };
+    if (setting?.globalValue !== undefined && isNativeTheme(setting.globalValue)) { return setting.globalValue; }
+    if (setting?.defaultValue !== undefined && isNativeTheme(setting.defaultValue)) { return setting.defaultValue; }
+    return this.findTheme('vs-seti') ? 'vs-seti' : null;
+  }
+
+  private async migrateGlobalTheme(): Promise<void> {
+    const configuration = vscode.workspace.getConfiguration('workbench');
+    const value = configuration.inspect<ThemeSetting>('iconTheme')?.globalValue;
+    if (value === undefined) { return; }
+    const slot = ownSlot(value);
+    if (slot === undefined) { return; }
+    const oldSelection = this.context.globalState.get<ThemeSelection>(GLOBAL_SELECTION_KEY);
+    let original: OriginalValue;
+    if (oldSelection?.slot === slot && isOriginalValue(oldSelection.original)) {
+      original = oldSelection.original;
+    } else {
+      let source: ThemeSetting | undefined;
+      try { source = await this.withLock(async state => this.sourceForSlot(state, slot)); } catch { }
+      if (source === undefined) {
+        const hint = this.sourceHint();
+        source = hint?.source;
+      }
+      original = source !== undefined && (source === null || this.findTheme(source)) ? captureValue(source) : { defined: false };
+      this.reportOnce('이전 노트 아이콘 테마의 설정 정보가 없어 사용 가능한 원본 테마로 복구했습니다.');
     }
-    return { target: 'global', original: captureValue(setting?.globalValue) };
+    if (configuration.inspect<ThemeSetting>('iconTheme')?.globalValue === value) {
+      await configuration.update('iconTheme', restoredValue(original), vscode.ConfigurationTarget.Global);
+    }
+    await this.context.globalState.update(GLOBAL_SELECTION_KEY, undefined);
+  }
+
+  private originalWorkspaceValue(): OriginalValue {
+    const value = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme')?.workspaceValue;
+    if (value === undefined || isNativeTheme(value)) { return captureValue(value); }
+    const hint = this.sourceHint();
+    if (hint) { return hint.original; }
+    const selection = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY);
+    if (selection && isOriginalValue(selection.original)) { return selection.original; }
+    this.reportOnce('복사된 노트 아이콘 테마의 원본 설정이 없어 현재 사용자 테마를 보존합니다.');
+    return { defined: false };
   }
 
   private async activateTheme(attempt = 0): Promise<boolean> {
-    if (this.disposed || !this.enabled()) { return false; }
+    if (this.disposed || !this.enabled() || !this.hasWorkspace()) { return false; }
     const selected = this.currentTheme();
-    const selectedSlot = ownSlot(selected);
-    if (selectedSlot !== undefined) {
-      const source = await this.withLock(async state => this.sourceForSlot(state, selectedSlot));
-      const definition = await this.buildTheme(source);
-      if (this.writtenThemes.get(selectedSlot) !== definition) {
-        await this.withLock(async () => this.writeTheme(selectedSlot, definition));
-      }
-      this.active = true;
-      return true;
+    const original = this.originalWorkspaceValue();
+    const globalBase = this.globalTheme();
+    const previous = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY);
+    const hint = this.sourceHint();
+    let source: ThemeSetting;
+    if (original.defined) {
+      source = original.value!;
+    } else if (previous?.globalBase !== undefined && previous.globalBase !== globalBase) {
+      source = globalBase;
+    } else if (this.hasOwnWorkspaceTheme() && hint) {
+      source = hint.source;
+    } else if (previous?.resume && previous.source !== undefined && isNativeTheme(previous.source)) {
+      source = previous.source;
+    } else {
+      source = globalBase;
     }
-
-    const selection = this.settingsTarget();
-    const definition = await this.buildTheme(selected);
+    const built = await this.buildWithFallback(source);
+    const definition = built.definition;
     if (this.currentTheme() !== selected) {
       if (attempt >= 2) { throw new Error('아이콘 테마가 계속 변경되어 노트 아이콘 적용을 건너뛰었습니다.'); }
       return this.activateTheme(attempt + 1);
     }
 
     const slot = await this.withLock(async state => {
-      const key = JSON.stringify(selected);
+      const key = JSON.stringify(built.appliedSource);
       let allocated = state.slots[key];
       if (allocated === undefined) {
         const occupied = new Set(Object.values(state.slots));
@@ -164,28 +266,26 @@ export class NoteIconThemeController implements vscode.Disposable {
         }
         state.slots[key] = allocated;
       }
-      await this.writeTheme(allocated, definition);
+      if (this.writtenThemes.get(allocated) !== definition) { await this.writeTheme(allocated, definition); }
       await this.writeState(state);
       return allocated;
     });
 
-    if (selection.target === 'workspace') {
-      await this.context.workspaceState.update(WORKSPACE_SELECTION_KEY, {
-        slot,
-        original: selection.original,
-      } satisfies ThemeSelection);
-    } else {
-      await this.context.globalState.update(GLOBAL_SELECTION_KEY, {
-        slot,
-        original: selection.original,
-      } satisfies ThemeSelection);
+    if (this.disposed || !this.enabled() || this.currentTheme() !== selected) { return false; }
+
+    if (this.active && selected === themeId(slot) && previous?.slot === slot && previous.source === source
+      && previous.globalBase === globalBase && sameOriginal(previous.original, original)
+      && hint?.source === source && sameOriginal(hint.original, original)) {
+      return true;
     }
+    await this.context.workspaceState.update(WORKSPACE_SELECTION_KEY, { slot, original, source, globalBase, resume: true } satisfies ThemeSelection);
+    await vscode.workspace.getConfiguration('cursorNotepads').update(SOURCE_SETTING_KEY, { source, original } satisfies SourceHint, vscode.ConfigurationTarget.Workspace);
     if (this.disposed || !this.enabled() || this.currentTheme() !== selected) { return false; }
 
     await vscode.workspace.getConfiguration('workbench').update(
       'iconTheme',
       themeId(slot),
-      selection.target === 'workspace' ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global,
+      vscode.ConfigurationTarget.Workspace,
     );
     this.active = true;
     // The workbench installs its theme watcher only after selecting the contributed theme.
@@ -193,25 +293,45 @@ export class NoteIconThemeController implements vscode.Disposable {
     return true;
   }
 
-  private async restoreTheme(): Promise<void> {
+  private async restoreTheme(preserveResume = false): Promise<void> {
     this.active = false;
+    if (!this.hasWorkspace()) { return; }
     const configuration = vscode.workspace.getConfiguration('workbench');
     const setting = configuration.inspect<ThemeSetting>('iconTheme');
     const workspaceSelection = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY);
-    if (workspaceSelection) {
-      if (setting?.workspaceValue === themeId(workspaceSelection.slot)) {
-        await configuration.update('iconTheme', restoredValue(workspaceSelection.original), vscode.ConfigurationTarget.Workspace);
-      }
-      await this.context.workspaceState.update(WORKSPACE_SELECTION_KEY, undefined);
+    if (setting?.workspaceValue !== undefined && ownSlot(setting.workspaceValue) !== undefined) {
+      const original = this.originalWorkspaceValue();
+      await configuration.update('iconTheme', restoredValue(original), vscode.ConfigurationTarget.Workspace);
     }
+    if (this.sourceHint()) {
+      await vscode.workspace.getConfiguration('cursorNotepads').update(SOURCE_SETTING_KEY, undefined, vscode.ConfigurationTarget.Workspace);
+    }
+    await this.context.workspaceState.update(WORKSPACE_SELECTION_KEY,
+      preserveResume && workspaceSelection ? { ...workspaceSelection, resume: true } : undefined);
+  }
 
-    const globalSelection = this.context.globalState.get<ThemeSelection>(GLOBAL_SELECTION_KEY);
-    if (globalSelection) {
-      const current = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme');
-      if (current?.globalValue === themeId(globalSelection.slot)) {
-        await configuration.update('iconTheme', restoredValue(globalSelection.original), vscode.ConfigurationTarget.Global);
+  private async buildWithFallback(source: ThemeSetting): Promise<{ definition: ThemeDefinition; appliedSource: ThemeSetting }> {
+    try {
+      const definition = await this.buildTheme(source);
+      this.lastProblem = undefined;
+      return { definition, appliedSource: source };
+    } catch (error) {
+      this.reportOnce(error instanceof Error ? error.message : '원본 아이콘 테마를 읽지 못했습니다.');
+      const setting = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme');
+      const candidates = [this.globalTheme(), setting?.defaultValue, 'vs-seti'];
+      for (const candidate of candidates) {
+        if (!isNativeTheme(candidate) || candidate === source || (candidate !== null && !this.findTheme(candidate))) { continue; }
+        try {
+          const definition = await this.buildTheme(candidate);
+          const desired = source === null ? undefined : this.findTheme(source);
+          if (desired?.extension.extensionUri.scheme === 'file') {
+            this.watchSource(vscode.Uri.joinPath(desired.extension.extensionUri, desired.theme.path));
+          }
+          return { definition, appliedSource: candidate };
+        } catch { }
       }
-      await this.context.globalState.update(GLOBAL_SELECTION_KEY, undefined);
+      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
+      throw new Error('원본과 기본 아이콘 테마를 읽지 못해 노트 아이콘 적용을 중단했습니다.');
     }
   }
 
@@ -261,7 +381,7 @@ export class NoteIconThemeController implements vscode.Disposable {
         throw new Error('원본 아이콘 테마를 읽지 못해 기존 테마를 유지합니다.');
       }
       definition = parsed as ThemeDefinition;
-      await this.rewriteAssets(definition, path.dirname(uri.fsPath));
+      await this.rewriteAssets(definition, path.dirname(uri.fsPath), uri);
     }
 
     if (definition.showLanguageModeIcons === undefined) {
@@ -282,10 +402,12 @@ export class NoteIconThemeController implements vscode.Disposable {
   }
 
   private watchSource(uri: vscode.Uri | undefined): void {
-    if (uri?.toString() === this.sourceUri) { return; }
+    const directories = uri ? this.assetDirectories.get(uri.toString()) ?? [] : [];
+    const key = uri ? `${uri.toString()}\n${directories.join('\n')}` : undefined;
+    if (key === this.sourceUri) { return; }
     for (const watcher of this.sourceWatchers) { watcher.dispose(); }
     this.sourceWatchers = [];
-    this.sourceUri = uri?.toString();
+    this.sourceUri = key;
     if (!uri) { return; }
     const watcher = vscode.workspace.createFileSystemWatcher(
       new vscode.RelativePattern(vscode.Uri.file(path.dirname(uri.fsPath)), path.basename(uri.fsPath)),
@@ -296,6 +418,15 @@ export class NoteIconThemeController implements vscode.Disposable {
       watcher.onDidCreate(() => this.scheduleRefresh()),
       watcher.onDidDelete(() => this.scheduleRefresh()),
     );
+    for (const directory of directories) {
+      const assetWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(directory), '*'));
+      this.sourceWatchers.push(
+        assetWatcher,
+        assetWatcher.onDidChange(() => this.scheduleRefresh()),
+        assetWatcher.onDidCreate(() => this.scheduleRefresh()),
+        assetWatcher.onDidDelete(() => this.scheduleRefresh()),
+      );
+    }
   }
 
   private scheduleRefresh(): void {
@@ -304,7 +435,10 @@ export class NoteIconThemeController implements vscode.Disposable {
     if (this.refreshTimer) { clearTimeout(this.refreshTimer); }
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      void this.enqueue(() => this.activateTheme()).catch(error => this.reportError(error));
+      void this.enqueue(() => this.activateTheme()).catch(async error => {
+        this.reportError(error);
+        if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
+      });
     }, 100);
   }
 
@@ -318,7 +452,7 @@ export class NoteIconThemeController implements vscode.Disposable {
     return undefined;
   }
 
-  private async rewriteAssets(definition: ThemeDefinition, sourceDirectory: string): Promise<void> {
+  private async rewriteAssets(definition: ThemeDefinition, sourceDirectory: string, sourceUri: vscode.Uri): Promise<void> {
     const destination = this.themeDirectory();
     const assets = new Set<string>();
     const rewrite = (original: string): string => {
@@ -341,6 +475,8 @@ export class NoteIconThemeController implements vscode.Disposable {
         if (typeof entry.path === 'string') { entry.path = rewrite(entry.path); }
       }
     }
+    this.assetDirectories.set(sourceUri.toString(), [...new Set([...assets].map(asset => path.dirname(asset)))].sort());
+    this.watchSource(sourceUri);
     const pending = [...assets];
     await Promise.all(Array.from({ length: Math.min(16, pending.length) }, async () => {
       while (pending.length) {
@@ -470,5 +606,11 @@ export class NoteIconThemeController implements vscode.Disposable {
 
   private reportError(error: unknown): void {
     this.report(error instanceof Error ? error.message : '노트 아이콘 테마 적용에 실패했습니다.');
+  }
+
+  private reportOnce(message: string): void {
+    if (this.lastProblem === message) { return; }
+    this.lastProblem = message;
+    this.report(message);
   }
 }

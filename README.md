@@ -67,9 +67,9 @@ Notepads in the Explorer sidebar — create, edit, and manage notes. Optionally 
 
 Note tabs use the full note title without adding a `.np` suffix, so `meeting.notes` stays `meeting.notes`. No manual Cursor settings are needed. Markdown mode is assigned when the note opens.
 
-Notepad tab icons are enabled by default. The extension creates a copy of your selected file icon theme with a Notepads icon added and automatically selects that copy. Other file icons are preserved. To turn this off and restore the original theme, run **Notepads: Restore Original File Icons** or disable `cursorNotepads.noteTabIcon` before uninstalling the extension.
+Notepad tab icons are enabled by default. The extension adds a transparent Notepads icon to a copy of your selected file icon theme and applies it to the current workspace. Your global icon theme and other file icons are preserved. To turn this off and restore the original workspace theme, run **Notepads: Restore Original File Icons** or disable `cursorNotepads.noteTabIcon`.
 
-This only affects notes opened from the Notepads view. Ordinary `.np` files and other files keep their names. After updating, reload the editor window and reopen existing notes from the Notepads view to apply the new tab names.
+This only affects notes opened from the Notepads view. Ordinary `.np` files and other files keep their names. Existing notes keep their storage location and format. After updating, reload the editor window and reopen existing notes from the Notepads view. Unsaved edits in an older note tab are kept in that tab until saved; saved older tabs are closed when the managed editor opens.
 
 - `cursorNotepads.verbose`: Show verbose notifications for all actions (default: `false`)
 - `cursorNotepads.noteTabIcon`: Show a Notepads icon on note tabs (default: `true`)
@@ -130,7 +130,7 @@ When enabled, you'll see notifications for:
 - **Workspace-specific**: Only shows notepads for the currently open workspace
 - **Single workspace**: Uses the first workspace folder if multiple are open
 - **One-time migration**: Database is only read once when `notepads.json` doesn't exist
-- **Tab icons**: Requires writable local extension files and a local file icon theme. Up to 16 original themes can be retained. Unsupported themes keep their original icons. Monochrome themes may also display the note icon in a single color.
+- **Tab icons**: Requires writable workspace settings, local extension files, and a local file icon theme. Up to 16 original themes can be retained. An unavailable original theme uses a usable installed theme until it becomes available again. Monochrome themes may also display the note icon in a single color.
 
 ## 🐛 Troubleshooting
 

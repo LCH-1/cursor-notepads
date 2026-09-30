@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as iconv from 'iconv-lite';
 import { parse } from 'jsonc-parser';
 import { ManagedNote, NOTE_ICON_PARENT, NOTE_SCHEME, NoteFileSystem } from '../noteFileSystem';
 
@@ -20,7 +21,7 @@ type ExtensionApi = {
     handleDrop(target: NoteItem | undefined, transfer: vscode.DataTransfer): Promise<void>;
   };
   files: NoteFileSystem;
-  icons: vscode.Disposable;
+  icons: vscode.Disposable & { ensureEnabled(): Promise<boolean> };
 };
 
 type Theme = Record<string, any>;
@@ -292,6 +293,121 @@ suite('Notepads native editor integration', function () {
     }
   });
 
+  test('Upgrading a clean legacy tab closes it before opening the managed editor', async function () {
+    const globalStorageDirectory = process.env.CNP_TEST_GLOBAL_STORAGE_DIR;
+    if (!globalStorageDirectory) { this.skip(); }
+    const note = await createNote('이전.저장된탭', '업데이트 전에 저장한 내용');
+    const directory = vscode.Uri.file(path.join(globalStorageDirectory, note.id));
+    const legacyUri = vscode.Uri.joinPath(directory, 'legacy-clean-title');
+    try {
+      await vscode.workspace.fs.createDirectory(directory);
+      await vscode.workspace.fs.writeFile(legacyUri, Buffer.from(note.text, 'utf8'));
+      const document = await vscode.workspace.openTextDocument(legacyUri);
+      await vscode.window.showTextDocument(document, { preview: false });
+      assert.strictEqual(document.isDirty, false);
+      const managed = await openNote(note);
+      await eventually(() => noteTab(legacyUri), tab => tab === undefined, 'The old clean tab still has a second editable copy');
+      await replaceText(managed, '업데이트 뒤 새 편집기에서 저장한 내용');
+      assert.strictEqual(await managed.document.save(), true);
+      assert.strictEqual(api.notes.getNoteById(note.id)?.text, managed.document.getText());
+      const latest = managed.document.getText();
+      const resurrected = await vscode.workspace.openTextDocument(legacyUri);
+      const oldEditor = await vscode.window.showTextDocument(resurrected, { preview: false });
+      await replaceText(oldEditor, '최근 파일에서 다시 연 오래된 본문 편집');
+      assert.strictEqual(await resurrected.save(), true);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      assert.strictEqual(api.notes.getNoteById(note.id)?.text, latest, 'A manually reopened old tab overwrote the managed editor');
+      assert.strictEqual(Buffer.from(await vscode.workspace.fs.readFile(legacyUri)).toString('utf8'), resurrected.getText());
+    } finally {
+      const tab = noteTab(legacyUri);
+      if (tab) { await vscode.window.tabGroups.close(tab); }
+      await vscode.workspace.fs.delete(directory, { recursive: true });
+    }
+  });
+
+  test('Refreshing external changes updates clean editors and preserves unsaved edits', async function () {
+    const globalStorageDirectory = process.env.CNP_TEST_GLOBAL_STORAGE_DIR;
+    if (!globalStorageDirectory) { this.skip(); }
+    const note = await createNote('재조회.외부변경', '이전 저장 본문');
+    let editor = await openNote(note);
+    const uri = editor.document.uri;
+    const storeUri = vscode.Uri.file(path.resolve(globalStorageDirectory, '..', '..', 'workspaceStorage', uri.path.split('/')[1], 'notepads.json'));
+    const rewriteExternal = async (text: string) => {
+      const stored = JSON.parse(Buffer.from(await vscode.workspace.fs.readFile(storeUri)).toString('utf8')) as ManagedNote[];
+      stored.find(item => item.id === note.id)!.text = text;
+      await vscode.workspace.fs.writeFile(storeUri, Buffer.from(JSON.stringify(stored), 'utf8'));
+      await vscode.commands.executeCommand('cnp.refresh');
+    };
+    const before = api.files.stat(uri).mtime;
+    const external = '다른 창에서 저장한 최신 본문';
+    await rewriteExternal(external);
+    await eventually(() => editor.document.getText(), text => text === external, 'Refresh left the clean editor on its old text');
+    assert.ok(api.files.stat(uri).mtime > before);
+    editor = await openNote(note);
+    assert.strictEqual(editor.document.getText(), external);
+    await replaceText(editor, '이 창에서 아직 저장하지 않은 본문');
+    const unsaved = editor.document.getText();
+    await rewriteExternal('다른 창에서 두 번째로 저장한 본문');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.strictEqual(editor.document.getText(), unsaved);
+    assert.strictEqual(editor.document.isDirty, true);
+    assert.strictEqual(await editor.document.save(), false, 'A conflicting dirty save overwrote the refreshed external text');
+    assert.strictEqual(api.notes.getNoteById(note.id)?.text, '다른 창에서 두 번째로 저장한 본문');
+    await vscode.commands.executeCommand('workbench.action.files.revert');
+    await eventually(() => editor.document.getText(), text => text === '다른 창에서 두 번째로 저장한 본문', 'Revert did not use the refreshed persisted text');
+  });
+
+  test('Configured UTF-16, UTF-8 BOM, and Korean encodings preserve Unicode note text', async () => {
+    const configuration = vscode.workspace.getConfiguration('files');
+    const original = configuration.inspect<string>('encoding')?.workspaceValue;
+    try {
+      for (const encoding of ['utf16le', 'utf8bom', 'euckr']) {
+        await configuration.update('encoding', encoding, vscode.ConfigurationTarget.Workspace);
+        const text = '# 한글 메모\r\n인코딩과 줄바꿈을 유지한다';
+        const note = await createNote(`인코딩.${encoding}`, text);
+        let editor = await openNote(note);
+        assert.strictEqual(editor.document.getText(), text, `Opening with ${encoding} corrupted the text`);
+        await replaceText(editor, `수정한 한글 메모\r\n${encoding} 저장 검증`);
+        const edited = editor.document.getText();
+        assert.strictEqual(await editor.document.save(), true);
+        assert.strictEqual(api.notes.getNoteById(note.id)?.text, edited, `Saving with ${encoding} corrupted the text`);
+        const tab = noteTab(editor.document.uri);
+        assert.ok(tab);
+        await vscode.window.tabGroups.close(tab);
+        editor = await openNote(note);
+        assert.strictEqual(editor.document.getText(), edited, `Reopening with ${encoding} corrupted the text`);
+      }
+    } finally {
+      await configuration.update('encoding', original, vscode.ConfigurationTarget.Workspace);
+    }
+  });
+
+  test('UTF-16 byte writes preserve Unicode and malformed unmarked writes cannot corrupt notes', async () => {
+    const note = await createNote('인코딩.바이트저장', '원래 본문');
+    const editor = await openNote(note);
+    const text = 'UTF-16 한글 저장\r\n둘째 줄';
+    await vscode.workspace.fs.writeFile(editor.document.uri, iconv.encode(text, 'utf16le', { addBOM: true }));
+    await eventually(() => editor.document.getText(), current => current === text, 'UTF-16 data was not decoded back to Unicode');
+    assert.strictEqual(api.notes.getNoteById(note.id)?.text, text);
+    await assert.rejects(async () => vscode.workspace.fs.writeFile(editor.document.uri, Buffer.from([0x80, 0x81, 0x82])));
+    assert.strictEqual(api.notes.getNoteById(note.id)?.text, text);
+  });
+
+  test('Explicit native encoding changes save the original Unicode text', async function () {
+    const note = await createNote('인코딩.직접선택', '선택 인코딩 검증');
+    let editor = await openNote(note);
+    if (typeof editor.document.encoding !== 'string') { this.skip(); }
+    for (const encoding of ['utf16le', 'euckr']) {
+      const document = await vscode.workspace.openTextDocument(editor.document.uri, { encoding });
+      assert.strictEqual(document.encoding, encoding);
+      editor = await vscode.window.showTextDocument(document, { preview: false });
+      await replaceText(editor, `직접 선택한 한글 인코딩 😀\r\n${encoding} 원문 검증`);
+      const expected = editor.document.getText();
+      assert.strictEqual(await editor.document.save(), true);
+      assert.strictEqual(api.notes.getNoteById(note.id)?.text, expected);
+    }
+  });
+
   test('Renaming changes the title while preserving the URI and saved content', async () => {
     const note = await createNote('이름.변경전', '이름 변경 내용');
     const editor = await openNote(note);
@@ -315,6 +431,7 @@ suite('Notepads native editor integration', function () {
 
     const selected = themeSetting();
     assert.ok(typeof selected === 'string' && selected.startsWith('cnp-notepad-icons-'), 'The generated Notepads theme is not selected');
+    assert.strictEqual(vscode.workspace.getConfiguration('workbench').inspect<string | null>('iconTheme')?.globalValue, originalGlobalTheme);
     const generated = await readTheme(selected);
     const source = originalTheme ? await readTheme(originalTheme) : { showLanguageModeIcons: false };
     assertThemeAssociations(source, generated);

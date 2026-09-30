@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as iconv from 'iconv-lite';
 
 export type ManagedNote = { id: string; name: string; text: string };
 
@@ -6,6 +7,9 @@ export const NOTE_SCHEME = 'cnp-notepad';
 export const NOTE_ICON_PARENT = 'lch-cursor-notepads-editor-7f4e19';
 
 type NoteTimes = { ctime: number; mtime: number };
+type EncodedTextDocument = vscode.TextDocument & { readonly encoding?: string };
+
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 export class NoteFileSystem implements vscode.FileSystemProvider, vscode.Disposable {
   private readonly changes = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
@@ -13,6 +17,7 @@ export class NoteFileSystem implements vscode.FileSystemProvider, vscode.Disposa
 
   private readonly times = new Map<string, NoteTimes>();
   private readonly knownNoteIds = new Set<string>();
+  private readonly pendingSaves = new Map<string, string>();
   private readonly createdAt = Date.now();
 
   constructor(
@@ -45,11 +50,17 @@ export class NoteFileSystem implements vscode.FileSystemProvider, vscode.Disposa
 
     const note = this.fileNote(uri);
     const times = this.noteTimes(note.id);
-    return { type: vscode.FileType.File, ...times, size: Buffer.byteLength(note.text, 'utf8') };
+    return { type: vscode.FileType.File, ...times, size: Buffer.byteLength(note.text, 'utf8') + UTF8_BOM.length };
   }
 
   readFile(uri: vscode.Uri): Uint8Array {
-    return Buffer.from(this.fileNote(uri).text, 'utf8');
+    return Buffer.concat([UTF8_BOM, Buffer.from(this.fileNote(uri).text, 'utf8')]);
+  }
+
+  prepareSave(document: vscode.TextDocument): void {
+    if (this.noteIdForUri(document.uri) !== undefined) {
+      this.pendingSaves.set(document.uri.toString(), document.getText());
+    }
   }
 
   async writeFile(
@@ -62,11 +73,14 @@ export class NoteFileSystem implements vscode.FileSystemProvider, vscode.Disposa
       throw vscode.FileSystemError.FileExists(uri);
     }
 
+    const key = uri.toString();
     let saved: boolean;
     try {
-      saved = await this.saveNote(note.id, Buffer.from(content).toString('utf8'));
+      saved = await this.saveNote(note.id, this.decodeWrite(uri, Buffer.from(content)));
     } catch {
       throw vscode.FileSystemError.Unavailable(uri);
+    } finally {
+      this.pendingSaves.delete(key);
     }
     if (!saved) {
       throw vscode.FileSystemError.Unavailable(uri);
@@ -127,6 +141,44 @@ export class NoteFileSystem implements vscode.FileSystemProvider, vscode.Disposa
     this.changes.dispose();
     this.times.clear();
     this.knownNoteIds.clear();
+    this.pendingSaves.clear();
+  }
+
+  private decodeWrite(uri: vscode.Uri, content: Buffer): string {
+    const snapshot = this.pendingSaves.get(uri.toString());
+    const document = vscode.workspace.textDocuments.find(
+      candidate => !candidate.isClosed && candidate.uri.toString() === uri.toString(),
+    ) as EncodedTextDocument | undefined;
+    const bomEncoding = content.subarray(0, 3).equals(UTF8_BOM) ? 'utf8'
+      : content[0] === 0xff && content[1] === 0xfe ? 'utf16le'
+      : content[0] === 0xfe && content[1] === 0xff ? 'utf16be' : undefined;
+
+    if (document && (document.encoding !== undefined || snapshot !== undefined)) {
+      const configured = vscode.workspace.getConfiguration('files', { uri, languageId: 'markdown' }).get<string>('encoding', 'utf8');
+      const selected = bomEncoding ?? document.encoding ?? configured;
+      const encoding = selected === 'utf8bom' ? 'utf8' : selected;
+      if (!iconv.encodingExists(encoding)) {
+        throw vscode.FileSystemError.Unavailable(`Unsupported note encoding: ${selected}`);
+      }
+      const texts = snapshot === undefined ? [document.getText()] : [document.getText(), snapshot];
+      for (const text of new Set(texts)) {
+        const encoded = iconv.encode(text, encoding);
+        if (encoded.equals(content) || this.withoutBom(encoded).equals(this.withoutBom(content))) {
+          return text;
+        }
+      }
+    }
+
+    if (bomEncoding) { return iconv.decode(content, bomEncoding); }
+    return new TextDecoder('utf-8', { fatal: true }).decode(content);
+  }
+
+  private withoutBom(content: Buffer): Buffer {
+    if (content.subarray(0, 3).equals(UTF8_BOM)) { return content.subarray(3); }
+    if ((content[0] === 0xff && content[1] === 0xfe) || (content[0] === 0xfe && content[1] === 0xff)) {
+      return content.subarray(2);
+    }
+    return content;
   }
 
   private fileNote(uri: vscode.Uri): ManagedNote {
