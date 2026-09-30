@@ -1,0 +1,85 @@
+name: Remove Notepads 1.2.2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remove-notepads-1-2-2
+  cancel-in-progress: false
+
+jobs:
+  remove-version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.1
+
+      - name: Verify both stores retain 1.2.3
+        id: before
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          async function checkedJson(url, options) {
+            const response = await fetch(url, options);
+            if (!response.ok) throw new Error(`Public version query failed: ${response.status}`);
+            return response.json();
+          }
+          async function main() {
+            if (require('./package.json').version !== '1.2.3') throw new Error('Unexpected release checkout');
+            const open = await checkedJson(`https://open-vsx.org/api/lch/cursor-notepads?versionRemovalCheck=${Date.now()}`);
+            if (open.namespace !== 'lch' || open.name !== 'cursor-notepads' || open.version !== '1.2.3') throw new Error('Open VSX latest must remain 1.2.3');
+            const query = await checkedJson('https://marketplace.visualstudio.com/_apis/public/gallery/extensionquery', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json;api-version=7.2-preview.1' },
+              body: JSON.stringify({ filters: [{ criteria: [{ filterType: 7, value: 'lch.cursor-notepads' }], pageNumber: 1, pageSize: 1 }], flags: 1 }),
+            });
+            const market = query.results?.[0]?.extensions?.[0];
+            if (market?.publisher?.publisherName !== 'lch' || market.extensionName !== 'cursor-notepads' || market.versions?.[0]?.version !== '1.2.3') throw new Error('Marketplace latest must remain 1.2.3');
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `openvsx=${Boolean(open.allVersions?.['1.2.2'])}\nmarketplace=${market.versions.some(v => v.version === '1.2.2')}\n`);
+            console.log('Both stores have latest 1.2.3; only retired version 1.2.2 is eligible.');
+          }
+          main().catch(error => { console.error(error.message); process.exitCode = 1; });
+          NODE
+
+      - name: Remove only Open VSX version 1.2.2
+        if: steps.before.outputs.openvsx == 'true'
+        env:
+          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: pnpm dlx ovsx@1.2.0 unpublish lch.cursor-notepads --versions 1.2.2 --force
+
+      - name: Install Marketplace API client
+        if: steps.before.outputs.marketplace == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/notepads-version-removal"
+          pnpm add --dir "$RUNNER_TEMP/notepads-version-removal" --ignore-scripts azure-devops-node-api@17.0.1
+
+      - name: Remove only Marketplace version 1.2.2
+        if: steps.before.outputs.marketplace == 'true'
+        env:
+          VS_MARKETPLACE_TOKEN: ${{ secrets.VS_MARKETPLACE_TOKEN }}
+          NODE_PATH: ${{ runner.temp }}/notepads-version-removal/node_modules
+        run: |
+          node <<'NODE'
+          const { GalleryApi } = require('azure-devops-node-api/GalleryApi');
+          const { getBasicHandler } = require('azure-devops-node-api/WebApi');
+          async function main() {
+            if (!process.env.VS_MARKETPLACE_TOKEN) throw new Error('Marketplace credential is unavailable');
+            const api = new GalleryApi('https://marketplace.visualstudio.com', [getBasicHandler('OAuth', process.env.VS_MARKETPLACE_TOKEN)]);
+            await api.deleteExtension('lch', 'cursor-notepads', '1.2.2');
+            console.log('Removed Marketplace version 1.2.2; extension and version 1.2.3 are retained.');
+          }
+          main().catch(error => {
+            console.error('Marketplace version removal failed; status:', typeof error.statusCode === 'number' ? error.statusCode : 'unavailable');
+            process.exitCode = 1;
+          });
+          NODE
