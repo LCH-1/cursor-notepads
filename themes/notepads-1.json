@@ -1,7 +1,7 @@
 {
   "iconDefinitions": {
     "_cnp_notepad": {
-      "iconPath": "../notepad.png"
+      "iconPath": "../assets/notepad-tab.svg"
     }
   },
   "fileNames": {

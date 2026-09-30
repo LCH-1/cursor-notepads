@@ -318,7 +318,7 @@ suite('Notepads native editor integration', function () {
     const generated = await readTheme(selected);
     const source = originalTheme ? await readTheme(originalTheme) : { showLanguageModeIcons: false };
     assertThemeAssociations(source, generated);
-    assert.strictEqual(generated.iconDefinitions._cnp_notepad.iconPath, '../notepad.png');
+    assert.strictEqual(generated.iconDefinitions._cnp_notepad.iconPath, '../assets/notepad-tab.svg');
     assert.strictEqual(generated.fileNames['fixture-file.np'], source.fileNames?.['fixture-file.np']);
   });
 

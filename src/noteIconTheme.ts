@@ -269,7 +269,7 @@ export class NoteIconThemeController implements vscode.Disposable {
         .filter(Boolean)
         .some(variant => ['fileNames', 'fileExtensions', 'languageIds'].some(key => Object.keys(variant[key] ?? {}).length > 0));
     }
-    definition.iconDefinitions = { ...definition.iconDefinitions, [OWN_ICON_ID]: { iconPath: '../notepad.png' } };
+    definition.iconDefinitions = { ...definition.iconDefinitions, [OWN_ICON_ID]: { iconPath: '../assets/notepad-tab.svg' } };
     const association = `${NOTE_ICON_PARENT}/note`;
     definition.fileNames = { ...definition.fileNames, [association]: OWN_ICON_ID };
     for (const variant of ['light', 'highContrast', 'highContrastLight']) {
