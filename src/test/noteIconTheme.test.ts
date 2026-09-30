@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 
 type ThemeSetting = string | null | undefined;
 type Settings = Map<string, unknown>;
+type WorkspaceFixture = { id: string; settings: Settings; state: MemoryMemento };
 type Controller = vscode.Disposable & {
   start(): Promise<void>;
   ensureEnabled(): Promise<boolean>;
@@ -51,12 +52,15 @@ class Profile {
   readonly windows: TestWindow[] = [];
   readonly defaults = new Map<string, unknown>([[THEME_KEY, ORIGINAL_THEME], [FEATURE_KEY, true]]);
   readonly extensions: { id: string; extensionUri: vscode.Uri; packageJSON: unknown }[] = [];
+  onGlobalChange: ((key: string, value: unknown) => void) | undefined;
+  globalUpdateFailure: Error | undefined;
 
   constructor(readonly directory: string) { }
 
   setGlobal(key: string, value: unknown): void {
     this.set(this.global, key, value);
     this.windows.forEach(window => window.changed(key));
+    this.onGlobalChange?.(key, value);
   }
 
   set(settings: Settings, key: string, value: unknown): void {
@@ -84,15 +88,19 @@ class Profile {
 
 class TestWindow {
   workspacePresent = true;
-  readonly settings = new Map<string, unknown>();
-  readonly state = new MemoryMemento();
+  readonly settings: Settings;
+  readonly state: MemoryMemento;
+  readonly workspaceId: string;
   readonly reports: string[] = [];
   private readonly configurationChanges = new vscode.EventEmitter<vscode.ConfigurationChangeEvent>();
   private readonly extensionChanges = new vscode.EventEmitter<void>();
   private readonly watchers: { pattern: vscode.RelativePattern; changes: vscode.EventEmitter<vscode.Uri>; disposed: boolean }[] = [];
   readonly controllers: Controller[] = [];
 
-  constructor(readonly profile: Profile, readonly id: string) {
+  constructor(readonly profile: Profile, readonly id: string, workspace?: WorkspaceFixture) {
+    this.settings = workspace?.settings ?? new Map<string, unknown>();
+    this.state = workspace?.state ?? new MemoryMemento();
+    this.workspaceId = workspace?.id ?? id;
     profile.windows.push(this);
   }
 
@@ -104,7 +112,7 @@ class TestWindow {
 
   setWorkspace(key: string, value: unknown): void {
     this.profile.set(this.settings, key, value);
-    this.changed(key);
+    this.profile.windows.filter(window => window.workspaceId === this.workspaceId).forEach(window => window.changed(key));
   }
 
   effective<T>(key: string): T | undefined {
@@ -126,7 +134,7 @@ class TestWindow {
   async controller(): Promise<Controller> {
     const extensionDirectory = path.join(this.profile.directory, 'notepads-extension');
     await fs.mkdir(path.join(extensionDirectory, 'themes'), { recursive: true });
-    const workspaceDirectory = path.join(this.profile.directory, this.id);
+    const workspaceDirectory = path.join(this.profile.directory, this.workspaceId);
     const context = {
       extensionUri: vscode.Uri.file(extensionDirectory),
       extensionPath: extensionDirectory,
@@ -150,7 +158,10 @@ class TestWindow {
       update: async (key: string, value: unknown, target: vscode.ConfigurationTarget) => {
         const fullKey = `${section}.${key}`;
         this.profile.writes.push({ window: this.id, key: fullKey, value: copy(value), target });
-        if (target === vscode.ConfigurationTarget.Global) { this.profile.setGlobal(fullKey, value); }
+        if (target === vscode.ConfigurationTarget.Global) {
+          if (this.profile.globalUpdateFailure) { throw this.profile.globalUpdateFailure; }
+          this.profile.setGlobal(fullKey, value);
+        }
         else { this.setWorkspace(fullKey, value); }
       },
     });
@@ -160,7 +171,7 @@ class TestWindow {
       RelativePattern: vscode.RelativePattern,
       ConfigurationTarget: vscode.ConfigurationTarget,
       workspace: {
-        workspaceFolders: this.workspacePresent ? [{ name: this.id, index: 0, uri: vscode.Uri.file(workspaceDirectory) }] : undefined,
+        workspaceFolders: this.workspacePresent ? [{ name: this.workspaceId, index: 0, uri: vscode.Uri.file(workspaceDirectory) }] : undefined,
         getConfiguration: configuration,
         onDidChangeConfiguration: this.configurationChanges.event,
         fs: { readFile: async (uri: vscode.Uri) => new Uint8Array(await fs.readFile(uri.fsPath)) },
@@ -264,9 +275,19 @@ suite('Notepads icon theme window and profile isolation', function () {
     assert.match(window.reports[0], /복구/);
     assert.strictEqual(await controller.ensureEnabled(), true);
     assert.strictEqual(window.reports.length, 1);
+
+    profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-8');
+    assert.strictEqual(await controller.ensureEnabled(), true);
+    assert.strictEqual(profile.global.get(THEME_KEY), 'cnp-notepad-icons-8');
+    assert.strictEqual((await window.generatedTheme()).file, '_fixture_file');
+    await controller.shutdown();
+    const restarted = await window.controller();
+    await restarted.start();
+    assert.strictEqual(profile.global.has(THEME_KEY), false);
+    assert.strictEqual((await window.generatedTheme()).file, '_fixture_file');
   });
 
-  test('A window without a workspace restores legacy and newly synchronized global slots without creating a workspace theme', async () => {
+  test('A window without a workspace migrates a global slot only once until its controller restarts', async () => {
     profile.setGlobal(FEATURE_KEY, false);
     profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-7');
     const window = new TestWindow(profile, 'empty-window');
@@ -280,17 +301,73 @@ suite('Notepads icon theme window and profile isolation', function () {
     assert.strictEqual(window.settings.has(SOURCE_KEY), false);
 
     profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-8');
-    const deadline = Date.now() + 3000;
-    while (profile.global.has(THEME_KEY)) {
-      assert.ok(Date.now() < deadline, 'A synchronized global slot was not restored in a window without a workspace');
-      await new Promise(resolve => setTimeout(resolve, 25));
-    }
-    assert.strictEqual(window.effective(THEME_KEY), ORIGINAL_THEME);
     assert.strictEqual(await controller.ensureEnabled(), false);
+    assert.strictEqual(profile.global.get(THEME_KEY), 'cnp-notepad-icons-8');
+    assert.strictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Global).length, 1);
+    await controller.shutdown();
+    const restarted = await window.controller();
+    await restarted.start();
+    assert.strictEqual(profile.global.has(THEME_KEY), false);
+    assert.strictEqual(window.effective(THEME_KEY), ORIGINAL_THEME);
+    assert.strictEqual(await restarted.ensureEnabled(), false);
     assert.strictEqual(window.settings.has(THEME_KEY), false);
     assert.strictEqual(window.settings.has(SOURCE_KEY), false);
     assert.deepStrictEqual(profile.writes.filter(write => write.target === vscode.ConfigurationTarget.Workspace), []);
     assert.strictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Global).length, 2);
+  });
+
+  test('An old global theme writer cannot make migration oscillate or replace the recovered native file icons', async () => {
+    const storage = path.join(directory, 'global-storage');
+    await fs.mkdir(storage, { recursive: true });
+    await fs.writeFile(path.join(storage, 'theme-slots.json'), JSON.stringify({ version: 1, slots: { [JSON.stringify(ALTERNATE_THEME)]: 7 } }));
+    profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-7');
+    let oldReapplications = 0;
+    profile.onGlobalChange = (key, value) => {
+      if (key === THEME_KEY && !(typeof value === 'string' && value.startsWith('cnp-notepad-icons-'))) {
+        oldReapplications++;
+        profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-7');
+      }
+    };
+    const window = new TestWindow(profile, 'mixed-version-window');
+    const controller = await window.controller();
+    await controller.start();
+    assert.strictEqual(await controller.ensureEnabled(), true);
+    assert.strictEqual(oldReapplications, 1);
+
+    for (const slot of [8, 7, 8]) {
+      profile.setGlobal(THEME_KEY, `cnp-notepad-icons-${slot}`);
+      assert.strictEqual(await controller.ensureEnabled(), true);
+      const generated = await window.generatedTheme();
+      assert.strictEqual(generated.file, '_alternate_file');
+      assert.strictEqual(generated.folder, '_alternate_file');
+      assert.strictEqual(generated.fileExtensions.ts, '_alternate_file');
+      assert.strictEqual(generated.languageIds.markdown, '_alternate_file');
+      assert.strictEqual(window.effective<{ source: string }>(SOURCE_KEY)?.source, ALTERNATE_THEME);
+      assert.strictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Global).length, 1);
+    }
+    assert.strictEqual(oldReapplications, 1);
+  });
+
+  test('An unsaved global settings file does not remove an existing workspace clone or block its native icons', async () => {
+    profile.setGlobal(THEME_KEY, 'cnp-notepad-icons-7');
+    profile.globalUpdateFailure = new Error('Unable to write into user settings because it is unsaved');
+    const window = new TestWindow(profile, 'unsaved-global-window');
+    window.setWorkspace(THEME_KEY, 'cnp-notepad-icons-11');
+    window.setWorkspace(SOURCE_KEY, { source: ALTERNATE_THEME, original: { defined: false } });
+    const controller = await window.controller();
+    await controller.start();
+    assert.strictEqual((await window.generatedTheme()).file, '_alternate_file');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      assert.strictEqual(await controller.ensureEnabled(), true);
+      assert.strictEqual((await window.generatedTheme()).file, '_alternate_file');
+    }
+    assert.strictEqual(profile.global.get(THEME_KEY), 'cnp-notepad-icons-7');
+    assert.strictEqual(window.effective<{ source: string }>(SOURCE_KEY)?.source, ALTERNATE_THEME);
+    assert.strictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Global).length, 1);
+    assert.ok(window.reports.some(message => /unsaved/.test(message)));
+    assert.deepStrictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Workspace
+      && !(typeof write.value === 'string' && write.value.startsWith('cnp-notepad-icons-'))), []);
+    assert.deepStrictEqual(profile.writes.filter(write => write.key === SOURCE_KEY && write.value === undefined), []);
   });
 
   test('A synchronized workspace slot is rebuilt from its source metadata on a new machine', async () => {
@@ -307,6 +384,39 @@ suite('Notepads icon theme window and profile isolation', function () {
     assert.strictEqual(window.settings.has(THEME_KEY), false);
     assert.strictEqual(window.effective(THEME_KEY), ORIGINAL_THEME);
     assert.deepStrictEqual(window.reports, []);
+  });
+
+  test('Closing one window of the same workspace preserves its peer theme until the last window closes', async () => {
+    const workspace: WorkspaceFixture = { id: 'shared-workspace', settings: new Map(), state: new MemoryMemento() };
+    workspace.settings.set(THEME_KEY, ALTERNATE_THEME);
+    const firstWindow = new TestWindow(profile, 'shared-window-a', workspace);
+    const secondWindow = new TestWindow(profile, 'shared-window-b', workspace);
+    const first = await firstWindow.controller();
+    const second = await secondWindow.controller();
+    await first.start();
+    await second.start();
+    assert.deepStrictEqual(await Promise.all([first.ensureEnabled(), second.ensureEnabled()]), [true, true]);
+    const selected = secondWindow.effective(THEME_KEY);
+    const metadata = secondWindow.effective(SOURCE_KEY);
+    const shutdownWritesStart = profile.writes.length;
+
+    await first.shutdown();
+    assert.strictEqual(secondWindow.effective(THEME_KEY), selected);
+    assert.deepStrictEqual(secondWindow.effective(SOURCE_KEY), metadata);
+    assert.strictEqual((await secondWindow.generatedTheme()).file, '_alternate_file');
+    assert.deepStrictEqual(profile.writes.slice(shutdownWritesStart).filter(write => write.key === THEME_KEY
+      && write.target === vscode.ConfigurationTarget.Workspace
+      && !(typeof write.value === 'string' && write.value.startsWith('cnp-notepad-icons-'))), []);
+    assert.deepStrictEqual(profile.writes.slice(shutdownWritesStart).filter(write => write.key === SOURCE_KEY && write.value === undefined), []);
+    assert.strictEqual(await second.ensureEnabled(), true);
+
+    await second.shutdown();
+    assert.strictEqual(workspace.settings.get(THEME_KEY), ALTERNATE_THEME);
+    assert.strictEqual(workspace.settings.has(SOURCE_KEY), false);
+    assert.strictEqual(profile.global.get(THEME_KEY), ORIGINAL_THEME);
+    assert.deepStrictEqual(profile.writes.filter(write => write.key === THEME_KEY && write.target === vscode.ConfigurationTarget.Global), []);
+    assert.deepStrictEqual(firstWindow.reports, []);
+    assert.deepStrictEqual(secondWindow.reports, []);
   });
 
   for (const original of [undefined, null, ALTERNATE_THEME] as ThemeSetting[]) {

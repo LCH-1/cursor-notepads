@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import { parse, ParseError } from 'jsonc-parser';
 import { NOTE_ICON_PARENT } from './noteFileSystem';
 
@@ -81,6 +82,10 @@ export class NoteIconThemeController implements vscode.Disposable {
   private refreshTimer: NodeJS.Timeout | undefined;
   private lastProblem: string | undefined;
   private shutdownPromise: Promise<void> | undefined;
+  private migrationAttempted = false;
+  private nativeGlobalTheme: ThemeSetting | undefined;
+  private readonly forcedThemes = new Set<number>();
+  private ownerMarker: string | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -99,10 +104,7 @@ export class NoteIconThemeController implements vscode.Disposable {
           } else if (event.affectsConfiguration(NOTE_ICON_SETTING) || this.active || this.hasOwnWorkspaceTheme()) {
             await this.activateTheme();
           }
-        }).catch(async error => {
-          this.reportError(error);
-          if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
-        });
+        }).catch(error => this.reportError(error));
       }
     }));
     this.disposables.push(vscode.extensions.onDidChange(() => this.scheduleRefresh()));
@@ -118,10 +120,7 @@ export class NoteIconThemeController implements vscode.Disposable {
       }
       const resume = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY)?.resume;
       if (wasSelected || this.hasOwnWorkspaceTheme() || resume) { await this.activateTheme(); }
-    }).catch(async error => {
-      this.reportError(error);
-      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
-    });
+    }).catch(error => this.reportError(error));
   }
 
   public async ensureEnabled(): Promise<boolean> {
@@ -134,9 +133,8 @@ export class NoteIconThemeController implements vscode.Disposable {
         return false;
       }
       return this.activateTheme();
-    }).catch(async error => {
+    }).catch(error => {
       this.reportError(error);
-      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
       return false;
     });
   }
@@ -185,35 +183,51 @@ export class NoteIconThemeController implements vscode.Disposable {
 
   private globalTheme(): ThemeSetting {
     const setting = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme');
-    if (setting?.globalValue !== undefined && isNativeTheme(setting.globalValue)) { return setting.globalValue; }
-    if (setting?.defaultValue !== undefined && isNativeTheme(setting.defaultValue)) { return setting.defaultValue; }
-    return this.findTheme('vs-seti') ? 'vs-seti' : null;
+    if (setting?.globalValue !== undefined && isNativeTheme(setting.globalValue)) {
+      this.nativeGlobalTheme = setting.globalValue;
+    } else if (setting?.globalValue !== undefined && ownSlot(setting.globalValue) !== undefined && this.nativeGlobalTheme !== undefined) {
+      return this.nativeGlobalTheme;
+    } else {
+      this.nativeGlobalTheme = setting?.defaultValue !== undefined && isNativeTheme(setting.defaultValue)
+        ? setting.defaultValue : this.findTheme('vs-seti') ? 'vs-seti' : null;
+    }
+    return this.nativeGlobalTheme;
   }
 
   private async migrateGlobalTheme(): Promise<void> {
+    if (this.migrationAttempted) { return; }
+    this.migrationAttempted = true;
     const configuration = vscode.workspace.getConfiguration('workbench');
     const value = configuration.inspect<ThemeSetting>('iconTheme')?.globalValue;
-    if (value === undefined) { return; }
+    if (value === undefined) { this.globalTheme(); return; }
     const slot = ownSlot(value);
-    if (slot === undefined) { return; }
-    const oldSelection = this.context.globalState.get<ThemeSelection>(GLOBAL_SELECTION_KEY);
-    let original: OriginalValue;
-    if (oldSelection?.slot === slot && isOriginalValue(oldSelection.original)) {
-      original = oldSelection.original;
-    } else {
-      let source: ThemeSetting | undefined;
-      try { source = await this.withLock(async state => this.sourceForSlot(state, slot)); } catch { }
-      if (source === undefined) {
-        const hint = this.sourceHint();
-        source = hint?.source;
+    if (slot === undefined) { this.globalTheme(); return; }
+    const hint = this.sourceHint();
+    if (hint && !hint.original.defined) { this.nativeGlobalTheme = hint.source; }
+    try {
+      const oldSelection = this.context.globalState.get<ThemeSelection>(GLOBAL_SELECTION_KEY);
+      let original: OriginalValue;
+      if (oldSelection?.slot === slot && isOriginalValue(oldSelection.original)) {
+        original = oldSelection.original;
+      } else {
+        const state = await this.readState();
+        const source = Object.values(state.slots).includes(slot) ? this.sourceForSlot(state, slot) : hint?.source;
+        original = source !== undefined && (source === null || this.findTheme(source)) ? captureValue(source) : { defined: false };
+        this.reportOnce('이전 노트 아이콘 테마의 설정 정보가 없어 사용 가능한 원본 테마로 복구했습니다.');
       }
-      original = source !== undefined && (source === null || this.findTheme(source)) ? captureValue(source) : { defined: false };
-      this.reportOnce('이전 노트 아이콘 테마의 설정 정보가 없어 사용 가능한 원본 테마로 복구했습니다.');
+      this.nativeGlobalTheme = original.defined ? original.value! : this.defaultTheme();
+      if (configuration.inspect<ThemeSetting>('iconTheme')?.globalValue === value) {
+        await configuration.update('iconTheme', restoredValue(original), vscode.ConfigurationTarget.Global);
+      }
+      await this.context.globalState.update(GLOBAL_SELECTION_KEY, undefined);
+    } catch (error) {
+      this.reportError(error);
     }
-    if (configuration.inspect<ThemeSetting>('iconTheme')?.globalValue === value) {
-      await configuration.update('iconTheme', restoredValue(original), vscode.ConfigurationTarget.Global);
-    }
-    await this.context.globalState.update(GLOBAL_SELECTION_KEY, undefined);
+  }
+
+  private defaultTheme(): ThemeSetting {
+    const value = vscode.workspace.getConfiguration('workbench').inspect<ThemeSetting>('iconTheme')?.defaultValue;
+    return value !== undefined && isNativeTheme(value) ? value : this.findTheme('vs-seti') ? 'vs-seti' : null;
   }
 
   private originalWorkspaceValue(): OriginalValue {
@@ -271,7 +285,17 @@ export class NoteIconThemeController implements vscode.Disposable {
       return allocated;
     });
 
-    if (this.disposed || !this.enabled() || this.currentTheme() !== selected) { return false; }
+    if (this.disposed || !this.enabled()) { return false; }
+    if (this.currentTheme() !== selected) {
+      if (attempt >= 2) { throw new Error('아이콘 테마가 계속 변경되어 노트 아이콘 적용을 건너뛰었습니다.'); }
+      return this.activateTheme(attempt + 1);
+    }
+
+    if (!await this.registerOwner(selected)) {
+      if (this.disposed || !this.enabled()) { return false; }
+      if (attempt >= 2) { throw new Error('아이콘 테마가 계속 변경되어 노트 아이콘 적용을 건너뛰었습니다.'); }
+      return this.activateTheme(attempt + 1);
+    }
 
     if (this.active && selected === themeId(slot) && previous?.slot === slot && previous.source === source
       && previous.globalBase === globalBase && sameOriginal(previous.original, original)
@@ -280,7 +304,11 @@ export class NoteIconThemeController implements vscode.Disposable {
     }
     await this.context.workspaceState.update(WORKSPACE_SELECTION_KEY, { slot, original, source, globalBase, resume: true } satisfies ThemeSelection);
     await vscode.workspace.getConfiguration('cursorNotepads').update(SOURCE_SETTING_KEY, { source, original } satisfies SourceHint, vscode.ConfigurationTarget.Workspace);
-    if (this.disposed || !this.enabled() || this.currentTheme() !== selected) { return false; }
+    if (this.disposed || !this.enabled()) { return false; }
+    if (this.currentTheme() !== selected) {
+      if (attempt >= 2) { throw new Error('아이콘 테마가 계속 변경되어 노트 아이콘 적용을 건너뛰었습니다.'); }
+      return this.activateTheme(attempt + 1);
+    }
 
     await vscode.workspace.getConfiguration('workbench').update(
       'iconTheme',
@@ -289,13 +317,68 @@ export class NoteIconThemeController implements vscode.Disposable {
     );
     this.active = true;
     // The workbench installs its theme watcher only after selecting the contributed theme.
-    await this.withLock(async () => this.writeTheme(slot, definition));
+    if (selected !== themeId(slot) || !this.forcedThemes.has(slot)) {
+      await this.withLock(async () => this.writeTheme(slot, definition, true));
+      this.forcedThemes.add(slot);
+    }
     return true;
   }
 
   private async restoreTheme(preserveResume = false): Promise<void> {
     this.active = false;
     if (!this.hasWorkspace()) { return; }
+    await this.withLock(async () => {
+      const directory = this.ownerDirectory();
+      if (this.ownerMarker) {
+        try { await fs.unlink(this.ownerMarker); } catch (error) {
+          if (!isFileError(error, 'ENOENT')) { throw error; }
+        }
+        this.ownerMarker = undefined;
+      }
+      let markers: string[];
+      try { markers = await fs.readdir(directory); } catch (error) {
+        if (!isFileError(error, 'ENOENT')) { throw error; }
+        markers = [];
+      }
+      for (const marker of markers) {
+        const match = /^(\d+)-[a-f\d-]+\.owner$/.exec(marker);
+        if (!match) { continue; }
+        try {
+          process.kill(Number(match[1]), 0);
+          return;
+        } catch (error) {
+          if (!isFileError(error, 'ESRCH')) { return; }
+          try { await fs.unlink(path.join(directory, marker)); } catch (unlinkError) {
+            if (!isFileError(unlinkError, 'ENOENT')) { throw unlinkError; }
+          }
+        }
+      }
+      await this.restoreThemeSettings(preserveResume);
+    });
+  }
+
+  private ownerDirectory(): string {
+    const uri = this.context.storageUri;
+    if (!uri || (uri.scheme !== 'file' && !(uri.scheme === 'vscode-userdata' && !uri.authority && path.isAbsolute(uri.fsPath)))) {
+      throw new Error('노트 아이콘을 사용하는 창의 저장 위치를 확인할 수 없습니다.');
+    }
+    return path.join(uri.fsPath, 'theme-icon-owners');
+  }
+
+  private async registerOwner(selected: ThemeSetting): Promise<boolean> {
+    if (this.ownerMarker) { return !this.disposed && this.enabled() && this.currentTheme() === selected; }
+    return this.withLock(async () => {
+      if (this.disposed || !this.enabled() || this.currentTheme() !== selected) { return false; }
+      const directory = this.ownerDirectory();
+      await fs.mkdir(directory, { recursive: true });
+      const marker = path.join(directory, `${process.pid}-${randomUUID()}.owner`);
+      await fs.writeFile(marker, '', { flag: 'wx' });
+      this.ownerMarker = marker;
+      return true;
+    });
+  }
+
+  private async restoreThemeSettings(preserveResume: boolean): Promise<void> {
     const configuration = vscode.workspace.getConfiguration('workbench');
     const setting = configuration.inspect<ThemeSetting>('iconTheme');
     const workspaceSelection = this.context.workspaceState.get<ThemeSelection>(WORKSPACE_SELECTION_KEY);
@@ -330,7 +413,6 @@ export class NoteIconThemeController implements vscode.Disposable {
           return { definition, appliedSource: candidate };
         } catch { }
       }
-      if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
       throw new Error('원본과 기본 아이콘 테마를 읽지 못해 노트 아이콘 적용을 중단했습니다.');
     }
   }
@@ -435,10 +517,7 @@ export class NoteIconThemeController implements vscode.Disposable {
     if (this.refreshTimer) { clearTimeout(this.refreshTimer); }
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      void this.enqueue(() => this.activateTheme()).catch(async error => {
-        this.reportError(error);
-        if (this.hasOwnWorkspaceTheme()) { await this.restoreTheme(true); }
-      });
+      void this.enqueue(() => this.activateTheme()).catch(error => this.reportError(error));
     }, 100);
   }
 
@@ -490,9 +569,9 @@ export class NoteIconThemeController implements vscode.Disposable {
     }));
   }
 
-  private async writeTheme(slot: number, definition: ThemeDefinition): Promise<void> {
+  private async writeTheme(slot: number, definition: ThemeDefinition, force = false): Promise<void> {
     const destination = path.join(this.themeDirectory(), `notepads-${slot}.json`);
-    await this.writeAtomic(destination, JSON.stringify(definition));
+    await this.writeAtomic(destination, JSON.stringify(definition), force);
     this.writtenThemes.set(slot, definition);
   }
 
@@ -528,15 +607,31 @@ export class NoteIconThemeController implements vscode.Disposable {
     await this.writeAtomic(path.join(this.storageDirectory(), 'theme-slots.json'), JSON.stringify({ version: 1, slots: state.slots }));
   }
 
-  private async writeAtomic(destination: string, text: string): Promise<void> {
+  private async writeAtomic(destination: string, text: string, force = false): Promise<void> {
     await fs.mkdir(path.dirname(destination), { recursive: true });
+    if (!force) {
+      try {
+        if (await this.retryBusy(() => fs.readFile(destination, 'utf8')) === text) { return; }
+      } catch (error) {
+        if (!isFileError(error, 'ENOENT')) { throw error; }
+      }
+    }
     const temporary = `${destination}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
     try {
-      await fs.writeFile(temporary, text, { encoding: 'utf8', flag: 'wx' });
-      await fs.rename(temporary, destination);
+      await this.retryBusy(() => fs.writeFile(temporary, text, { encoding: 'utf8', flag: 'wx' }));
+      await this.retryBusy(() => fs.rename(temporary, destination));
     } finally {
-      try { await fs.unlink(temporary); } catch (error) {
+      try { await this.retryBusy(() => fs.unlink(temporary)); } catch (error) {
         if (!isFileError(error, 'ENOENT')) { throw error; }
+      }
+    }
+  }
+
+  private async retryBusy<T>(operation: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await operation(); } catch (error) {
+        if (attempt >= 3 || !(isFileError(error, 'EPERM') || isFileError(error, 'EBUSY') || isFileError(error, 'EACCES'))) { throw error; }
+        await new Promise(resolve => setTimeout(resolve, 20 * 2 ** attempt));
       }
     }
   }
@@ -549,7 +644,7 @@ export class NoteIconThemeController implements vscode.Disposable {
     let lock: fs.FileHandle;
     for (;;) {
       try {
-        lock = await fs.open(lockPath, 'wx');
+        lock = await this.retryBusy(() => fs.open(lockPath, 'wx'));
         try {
           await lock.writeFile(String(process.pid), 'utf8');
         } catch (error) {
